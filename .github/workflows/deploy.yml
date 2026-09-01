@@ -1,0 +1,116 @@
+name: Build, push, and update manifests
+
+# paths-ignore is the primary guard against the update-manifest job's own
+# commit re-triggering this workflow; the commit message's [skip ci] marker
+# is a second, independent guard (see job 2) -- either alone would work,
+# both together means one mechanism failing silently doesn't create a loop.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "k8s/**"
+
+# Repo-wide default is read-only; each job below grants itself only the
+# extra permission it actually needs, nothing broader.
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      short_sha: ${{ steps.sha.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Two images: the scraper (Dockerfile, runs as the k8s CronJob) and
+      # the dashboard (Dockerfile.dashboard, runs as the k8s Deployment).
+      - name: Build and push scraper image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-scraper:${{ steps.sha.outputs.short_sha }}
+          cache-from: type=gha,scope=scraper
+          cache-to: type=gha,mode=max,scope=scraper
+
+      - name: Build and push dashboard image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.dashboard
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-dashboard:${{ steps.sha.outputs.short_sha }}
+          cache-from: type=gha,scope=dashboard
+          cache-to: type=gha,mode=max,scope=dashboard
+
+  update-manifest:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # Pinned exact version, not a floating tag -- reproducible, and this
+      # is the same binary/version verified locally against these manifests
+      # before this workflow was written.
+      - name: Install yq
+        run: |
+          curl -sL "https://github.com/mikefarah/yq/releases/download/v4.53.6/yq_linux_amd64" -o /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      # Both manifest files are multi-document YAML (--- separated). A plain
+      # `yq -i '.spec...'` applies to every document in the file, and since
+      # the *other* document in each file doesn't have that path, yq's
+      # default behavior creates it -- silently corrupting the PVC (in
+      # cronjob.yaml) or the Service (in dashboard.yaml) with a bogus nested
+      # block. Verified this failure locally before adding the `select(di
+      # == N)` document-index scoping below, which fixes it.
+      - name: Update image tags in k8s manifests
+        env:
+          SHORT_SHA: ${{ needs.build-and-push.outputs.short_sha }}
+        run: |
+          yq -i "(select(di == 1) | .spec.jobTemplate.spec.template.spec.containers[0].image) = \"${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-scraper:${SHORT_SHA}\"" k8s/cronjob.yaml
+          yq -i "(select(di == 0) | .spec.template.spec.containers[0].image) = \"${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-dashboard:${SHORT_SHA}\"" k8s/dashboard.yaml
+
+      - name: Commit and push
+        env:
+          SHORT_SHA: ${{ needs.build-and-push.outputs.short_sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/cronjob.yaml k8s/dashboard.yaml
+          if git diff --cached --quiet; then
+            echo "No manifest changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: deploy ${SHORT_SHA} [skip ci]"
+          git push

@@ -20,7 +20,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: job-bot-data
-  namespace: default
+  namespace: job-bot
 spec:
   accessModes:
     - ReadWriteOnce
@@ -34,7 +34,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: job-bot-scraper
-  namespace: default
+  namespace: job-bot
 spec:
   # Fixed 10-min tick; the container itself adds a random 0-2.5min jitter
   # on top of this before actually scraping (see polling.jitter_minutes
@@ -51,9 +51,16 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          # This repo is private, so GHCR packages built from it are
+          # private by default too -- the cluster needs credentials to
+          # pull. ghcr-secret is created manually (kubectl create secret
+          # docker-registry), not by this repo/ArgoCD, since it holds a
+          # real credential.
+          imagePullSecrets:
+            - name: ghcr-secret
           containers:
             - name: job-bot
-              image: job-bot:latest # replace with your registry path
+              image: job-bot-scraper:latest # overwritten by .github/workflows/deploy.yml on every push to main
               args: ["--once"]
               env:
                 - name: CONFIG_PATH

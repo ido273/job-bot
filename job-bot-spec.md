@@ -475,6 +475,127 @@ unit), and end with a direct, confident closing.
 
 ---
 
+## Phase 4 — CI/CD: GitHub Actions + ArgoCD
+
+> **Built 2026-09-01.** GitHub Actions builds and pushes both container
+> images on every push to `main` and updates the image tags in `k8s/`;
+> ArgoCD (once installed) watches that path and syncs the cluster.
+> GitHub Actions never talks to the cluster directly.
+>
+> **Update 2026-09-01, later same day**: the k3s VM exists now, ArgoCD is
+> installed and syncing this repo's `k8s/` path for real. First real sync
+> caught a real bug — see "Incident: everything synced to the wrong
+> namespace" below — now fixed, still on the `feature/ci-cd-argocd-deploy`
+> branch (PR #1) pending merge.
+
+### Workflow: `.github/workflows/deploy.yml`
+
+Two jobs:
+
+1. **`build-and-push`** — checks out the repo, logs into GHCR with the
+   built-in `GITHUB_TOKEN` (no PAT needed), and builds+pushes both
+   images (`Dockerfile` → `ghcr.io/<owner>/job-bot-scraper`,
+   `Dockerfile.dashboard` → `ghcr.io/<owner>/job-bot-dashboard`), each
+   tagged with the short git SHA. Scoped to `permissions: packages:
+   write` (plus the `contents: read` every job gets by default) — it
+   never needs to write back to the repo.
+2. **`update-manifest`** (`needs: build-and-push`) — checks out `main`,
+   installs a pinned `yq` binary, rewrites the `image:` field in
+   `k8s/cronjob.yaml` and `k8s/dashboard.yaml` to the SHA just built,
+   commits, and pushes. Scoped to `permissions: contents: write` — it
+   never touches GHCR.
+
+Why two jobs instead of one: the permission split is the actual reason
+(`packages: write` and `contents: write` are each handed to only the job
+that needs it, not both to everything), not just organization.
+
+**A real bug caught before it shipped**: both `k8s/cronjob.yaml` (PVC +
+CronJob) and `k8s/dashboard.yaml` (Deployment + Service) are
+multi-document YAML files. A plain `yq -i '.spec...' file.yaml` applies
+to *every* document in the file — tested locally, and it silently
+fabricated a bogus nested `spec.template.spec.containers[0].image` block
+inside the PVC and the Service (documents that have no such path, so yq
+auto-vivified one). Fixed with document-index scoping —
+`(select(di == 1) | .spec...) = "..."` — so the update only ever touches
+the one document that actually has that field. This is why the workflow
+comment says "verified locally" next to that step: it was, and the
+naive version really did corrupt both files before the fix.
+
+**Trigger-loop guard, two independent layers**: `update-manifest`'s own
+commit only touches files under `k8s/`, and the workflow's trigger has
+`paths-ignore: ["k8s/**"]` — so that commit shouldn't re-trigger the
+workflow at all. The commit message also carries `[skip ci]`, which
+GitHub Actions honors independently of path filtering. Either mechanism
+alone would prevent the loop; both together means one failing silently
+(e.g. someone editing the paths-ignore list without noticing) doesn't
+immediately create one.
+
+**No self-hosted runner**: GitHub's standard hosted `ubuntu-latest`
+runners are used for both jobs. Nothing in this pipeline needs to reach
+the k3s cluster — job 1 talks to GHCR, job 2 talks to this git repo, both
+ordinary internet endpoints a hosted runner can reach with zero network
+setup. The cluster side is entirely ArgoCD's job: it pulls from git, the
+pipeline never pushes to it. That separation is *why* a self-hosted
+runner was never a requirement here.
+
+### ArgoCD: `k8s/argocd-application.yaml`
+
+Points at this repo's `k8s/` path on `main`, targets the **`job-bot`**
+namespace (created automatically via `syncOptions: [CreateNamespace=true]`
+if it doesn't exist), with `automated: {prune: true, selfHeal: true}` —
+sync on every change, remove resources ArgoCD manages that disappear from
+`k8s/`, and revert manual `kubectl edit` drift back to what's in git.
+`directory.exclude` skips `secret.example.yaml` (placeholder values only,
+never meant to be applied) and the Application manifest itself (applying
+an Application resource via its own sync would be circular).
+
+This changed the manifests themselves too: every resource in `k8s/` had
+`namespace: default` hardcoded, which would have silently overridden the
+Application's `destination.namespace: job-bot` (an explicit namespace in
+a manifest wins over the Application-level default) — updated all of
+them to `namespace: job-bot` so there's no mismatch between what the
+Application targets and what the manifests actually say.
+
+### Incident: everything synced to the wrong namespace
+
+The `namespace: default` fix above was made *before* ArgoCD ever ran
+(anticipated while writing the Application manifest) but landed only on
+the still-open `feature/ci-cd-argocd-deploy` branch. The Application's
+`targetRevision: main` means it synced whatever was actually on `main`
+— which was the pre-fix manifests — so the predicted bug happened for
+real anyway: `kubectl get application job-bot -n argocd -o
+jsonpath='{.status.resources}'` showed every resource (Deployment,
+Service, CronJob, PVC) created in `default`, not `job-bot`. Lesson: a
+fix sitting in an unmerged PR provides zero protection — what matters is
+what's actually on the branch ArgoCD points at.
+
+Two more things came out of chasing this down:
+
+- **`imagePullSecrets` was never wired in.** This repo is private, so
+  GHCR images built from it are private packages by default too — pods
+  need a pull credential. A `ghcr-secret` (docker-registry type) had
+  been created manually in the `job-bot` namespace but no pod spec
+  referenced it. Added `imagePullSecrets: [{name: ghcr-secret}]` to both
+  the CronJob's and the Deployment's pod spec. This secret is
+  deliberately *not* templated in `k8s/` the way `job-bot-secrets` has
+  `secret.example.yaml` — a docker-registry secret's `.dockerconfigjson`
+  isn't meaningfully hand-authorable as a YAML template, so the exact
+  `kubectl create secret docker-registry` command is documented in
+  README's k3s deploy section instead.
+- **No images had ever actually been built.** `.github/workflows/`
+  doesn't exist on `main` yet either (same unmerged-PR problem), so the
+  workflow has literally never run — confirmed via `gh api
+  /user/packages/container/...` returning 404 for both image names, and
+  `gh run list` showing no runs of this workflow, ever. Merging PR #1 is
+  what actually starts producing images, not just fixing the namespace.
+
+Broader audit (image names, ports, secret/PVC name references across
+every file in `k8s/` and the workflow) turned up nothing else — the
+namespace field was the only hardcoded value that had drifted from what
+another file assumed.
+
+---
+
 ## Suggested order of operations
 
 1. Send **Phase 1** prompt to Claude Code. Test that it actually sends you a real Telegram message for a real AllJobs listing before moving on.

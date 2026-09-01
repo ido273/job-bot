@@ -134,12 +134,37 @@ docker compose logs -f
 
 ### 6. Deploy to k3s (primary target)
 
+This repo is private, so the images GitHub Actions builds (Phase 4) are
+private GHCR packages too — the cluster needs a pull credential before
+`cronjob.yaml`/`dashboard.yaml` will actually run (otherwise: pods stuck
+`ImagePullBackOff`). Create it once, manually — it holds a real
+credential, so unlike everything else in `k8s/` it's not something ArgoCD
+manages or this repo templates:
+
+```bash
+# PAT needs read:packages scope: https://github.com/settings/tokens
+kubectl create namespace job-bot
+kubectl create secret docker-registry ghcr-secret \
+  --namespace job-bot \
+  --docker-server=ghcr.io \
+  --docker-username=<your-github-username> \
+  --docker-password=<a PAT with read:packages> \
+  --docker-email=<your-email>
+```
+
+Then:
+
 ```bash
 cp k8s/secret.example.yaml k8s/secret.yaml   # fill in real values (Telegram/WhatsApp/dashboard auth)
-kubectl apply -f k8s/secret.yaml
+kubectl apply -n job-bot -f k8s/secret.yaml
 kubectl apply -f k8s/cronjob.yaml
 kubectl apply -f k8s/dashboard.yaml
 ```
+
+(Once ArgoCD is syncing this repo, as in Phase 4 below, ArgoCD applies
+`cronjob.yaml`/`dashboard.yaml` for you — the `ghcr-secret` and
+`k8s/secret.yaml` steps above are still manual either way, since both
+hold real credentials that never belong in git.)
 
 The CronJob fires every 10 minutes; the container adds its own random
 jitter on top before actually scraping (see `polling.jitter_minutes` in
@@ -265,6 +290,31 @@ continuous-loop cycle); "Scan now" always runs regardless of pause state,
 since it's an explicit request, not a scheduled one. Both a bot command
 and a dashboard-click "Scan now" share one lock, so overlapping requests
 no-op instead of running two scrapes at once.
+
+## Phase 4 — CI/CD: GitHub Actions + ArgoCD (built, ArgoCD side not yet live)
+
+Push to `main` → GitHub Actions builds+pushes both images to GHCR
+(`ghcr.io/<owner>/job-bot-scraper`, `ghcr.io/<owner>/job-bot-dashboard`,
+tagged with the short SHA) → a second job updates the image tags in
+`k8s/cronjob.yaml` and `k8s/dashboard.yaml` and commits that back →
+ArgoCD (once installed) picks up the change and syncs the cluster.
+GitHub Actions never touches the cluster directly, so it's plain hosted
+runners the whole way — see `job-bot-spec.md`'s Phase 4 section for the
+full breakdown (the two-job permission split, the multi-document-YAML
+bug the manifest-update step had to work around, the trigger-loop
+double guard).
+
+**Not yet live**: no k3s cluster exists yet, so ArgoCD hasn't been
+installed and `k8s/argocd-application.yaml` hasn't been applied. Once
+the cluster's up:
+
+```bash
+# after installing ArgoCD in the cluster (not covered here)
+kubectl apply -f k8s/argocd-application.yaml
+```
+
+It targets the `job-bot` namespace (auto-created), watching this repo's
+`k8s/` path on `main` with auto-sync + self-heal enabled.
 
 ## Non-negotiables (repeated here as a quick check before every phase)
 
