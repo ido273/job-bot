@@ -57,6 +57,9 @@ class DrushimScraper(SiteScraper):
         # page load -- warm the session up before hitting a search URL.
         warm_resp = self.get(session, base_url + "/")
         self._check_block(warm_resp.text)
+        # A real browser never navigates from homepage to search results in
+        # ~0ms; always pace this gap too, not just between search_urls[i>0].
+        self.rate_limit_sleep()
 
         jobs: list[Job] = []
         search_urls = self.site_config.get("search_urls", [])
