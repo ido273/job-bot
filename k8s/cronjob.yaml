@@ -1,0 +1,77 @@
+# Deploy order:
+#   1. cp k8s/secret.example.yaml k8s/secret.yaml, fill in real values, then:
+#      kubectl apply -f k8s/secret.yaml
+#   2. kubectl apply -f k8s/cronjob.yaml
+#   3. kubectl apply -f k8s/dashboard.yaml
+#
+# Config lives on the shared PVC (not a ConfigMap) so the Phase 2 dashboard
+# can write to it -- on first run, src/config.py seeds it from the image's
+# baked-in config/config.yaml if the PVC path doesn't have one yet. After
+# that, the PVC copy is the live one; edit it via the dashboard, or with
+# `kubectl exec` into either pod if you need to touch it directly.
+#
+# NOTE: this PVC is mounted by both this CronJob's pods and the dashboard
+# Deployment's pod. A ReadWriteOnce volume only supports that if both land
+# on the same node -- fine for a single-node k3s box; on a multi-node
+# cluster either pin both workloads to one node (nodeSelector/affinity) or
+# switch storageClassName to something ReadWriteMany-capable (e.g. NFS).
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: job-bot-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: local-path  # uncomment/adjust for your k3s storage class
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: job-bot-scraper
+  namespace: default
+spec:
+  # Fixed 10-min tick; the container itself adds a random 0-2.5min jitter
+  # on top of this before actually scraping (see polling.jitter_minutes
+  # in config.yaml), so requests to job sites don't land on a predictable
+  # timestamp every time.
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 480 # kill a stuck run before the next tick fires
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: job-bot
+              image: job-bot:latest # replace with your registry path
+              args: ["--once"]
+              env:
+                - name: CONFIG_PATH
+                  value: /app/data/config/config.yaml
+              envFrom:
+                - secretRef:
+                    name: job-bot-secrets
+              volumeMounts:
+                - name: data
+                  mountPath: /app/data
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: job-bot-data

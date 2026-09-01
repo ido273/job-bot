@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}משרות | בוט חיפוש עבודה{% endblock %}
+{% block content %}
+
+<div class="glass">
+  <h1>משרות</h1>
+  <div class="stats">
+    {% for label, key in [("נמצאו", "found"), ("הוגשו", "applied"), ("ראיון", "interview"), ("הצעה", "offer"), ("נדחו", "rejected")] %}
+    <div class="stat">
+      <div class="num">{{ status_counts.get(key, 0) }}</div>
+      <div class="label">{{ label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="muted" style="font-size:0.85rem">
+    {% for site, count in site_counts.items() %}{{ site }}: {{ count }}{% if not loop.last %} · {% endif %}{% endfor %}
+  </div>
+</div>
+
+<div class="glass">
+  <form method="get" action="/jobs" class="filters">
+    <div>
+      <label for="status">סטטוס</label>
+      <select name="status" id="status" onchange="this.form.submit()">
+        <option value="">הכל</option>
+        {% for s in status_options %}
+        <option value="{{ s }}" {{ "selected" if current_status == s }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="source_site">אתר</label>
+      <select name="source_site" id="source_site" onchange="this.form.submit()">
+        <option value="">הכל</option>
+        {% for s in sites %}
+        <option value="{{ s }}" {{ "selected" if current_source_site == s }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="work_mode">מתכונת עבודה</label>
+      <select name="work_mode" id="work_mode" onchange="this.form.submit()">
+        <option value="">הכל</option>
+        <option value="onsite" {{ "selected" if current_work_mode == "onsite" }}>במשרד</option>
+        <option value="hybrid" {{ "selected" if current_work_mode == "hybrid" }}>היברידי</option>
+        <option value="remote" {{ "selected" if current_work_mode == "remote" }}>מרחוק</option>
+      </select>
+    </div>
+    <div>
+      <label for="sort">מיון</label>
+      <select name="sort" id="sort" onchange="this.form.submit()">
+        <option value="found_at" {{ "selected" if sort == "found_at" }}>תאריך</option>
+        <option value="title" {{ "selected" if sort == "title" }}>תפקיד</option>
+        <option value="company" {{ "selected" if sort == "company" }}>חברה</option>
+        <option value="status" {{ "selected" if sort == "status" }}>סטטוס</option>
+      </select>
+    </div>
+  </form>
+
+  {% if jobs %}
+  <div class="job-list">
+    {% for job in jobs %}
+    <a class="job-card" href="/jobs/{{ job['id'] }}">
+      <div>
+        <div class="job-card__title">{{ job['title'] }}</div>
+        <div class="job-card__meta">
+          {{ job['company'] or 'חברה לא ידועה' }} · {{ job['location'] or '' }} ·
+          {% if job['work_mode'] == 'remote' %}מרחוק{% elif job['work_mode'] == 'hybrid' %}היברידי{% else %}במשרד{% endif %}
+          · {{ job['source_site'] }} · {{ job['found_at'][:10] }}
+        </div>
+      </div>
+      <span class="badge status-{{ job['status'] or 'found' }}">{{ job['status'] or 'found' }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">אין משרות תואמות עדיין. הבוט בודק אתרים כל 10 דקות בערך.</div>
+  {% endif %}
+</div>
+
+<div class="glass">
+  <h2>חיפוש ב-LinkedIn</h2>
+  <p class="muted">LinkedIn לא נסרק אוטומטית (חסימת בוטים אגרסיבית). קישור חיפוש מוכן עם מילות המפתח והמיקום הנוכחיים:</p>
+  <a class="btn secondary" href="{{ linkedin_url }}" target="_blank" rel="noopener">פתח חיפוש ב-LinkedIn ↗</a>
+</div>
+
+{% endblock %}

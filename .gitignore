@@ -1,0 +1,22 @@
+# Secrets
+.env
+k8s/secret.yaml
+
+# Personal data
+data/
+*.sqlite3
+*.sqlite3-journal
+*CV*
+*cv*
+*.pdf
+*.docx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# OS
+.DS_Store

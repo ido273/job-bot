@@ -1,0 +1,84 @@
+# Deploy after k8s/cronjob.yaml (needs the same job-bot-data PVC and
+# job-bot-secrets Secret to already exist):
+#   kubectl apply -f k8s/dashboard.yaml
+#
+# NodePort by default -- reachable at http://<any-node-ip>:30080 on your
+# home network without needing an ingress controller already set up. If
+# your k3s cluster already runs one (Traefik ships with k3s by default),
+# swap the Service below for a ClusterIP + Ingress instead; NodePort is
+# just the option that works with zero prerequisites.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-bot-dashboard
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-bot-dashboard
+  template:
+    metadata:
+      labels:
+        app: job-bot-dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: job-bot-dashboard:latest # replace with your registry path
+          ports:
+            - containerPort: 8000
+          env:
+            - name: CONFIG_PATH
+              value: /app/data/config/config.yaml
+          envFrom:
+            - secretRef:
+                name: job-bot-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: job-bot-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: job-bot-dashboard
+  namespace: default
+spec:
+  type: NodePort
+  selector:
+    app: job-bot-dashboard
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30080
+
+# --- Ingress alternative (uncomment if you already run an ingress controller) ---
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: job-bot-dashboard
+#   namespace: default
+# spec:
+#   rules:
+#     - host: jobbot.home.lab  # point this at your k3s node in local DNS/hosts
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: job-bot-dashboard
+#                 port:
+#                   number: 8000

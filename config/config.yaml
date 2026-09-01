@@ -1,0 +1,155 @@
+# Job Search Bot — Phase 1 configuration
+# Structured on purpose (lists/fields, not free text) so Phase 2 can expose
+# this as editable form fields in the dashboard without a schema change.
+
+sites:
+  alljobs:
+    enabled: true
+    display_name: "AllJobs"
+    base_url: "https://www.alljobs.co.il"
+    # Pre-built AllJobs search-result URLs to poll. AllJobs' keyword search
+    # is a client-side (Angular) form with no stable freetext query-string
+    # API, so instead of guessing one, we poll verified server-rendered
+    # result pages and let matching.role_keywords do the precise filtering.
+    # Add more URLs here (e.g. other categories/cities) without touching code.
+    search_urls:
+      - "https://www.alljobs.co.il/SearchResultsGuest.aspx?page=1&position=1801&type=&city=&region="
+    robots_txt_url: "https://www.alljobs.co.il/robots.txt"
+
+  drushim:
+    enabled: true
+    display_name: "Drushim"
+    base_url: "https://www.drushim.co.il"
+    # Unlike AllJobs, Drushim's keyword search actually works (verified
+    # live) -- results come from a Next.js __NEXT_DATA__ JSON blob embedded
+    # in the page, not HTML scraping. Add more keyword URLs here as needed.
+    search_urls:
+      - "https://www.drushim.co.il/jobs/search/DevOps/"
+    robots_txt_url: "https://www.drushim.co.il/robots.txt"
+
+  jobmaster:
+    enabled: false # built in a later Phase 1 step, after AllJobs is verified end-to-end
+    display_name: "JobMaster"
+    base_url: "https://www.jobmaster.co.il"
+    search_urls: []
+    robots_txt_url: "https://www.jobmaster.co.il/robots.txt"
+
+matching:
+  role_keywords:
+    - DevOps
+    - Junior DevOps
+    - DevOps Engineer
+    - Cloud Engineer
+    - Infrastructure Engineer
+    - Site Reliability Engineer
+    - SRE
+    - Kubernetes Engineer
+    - Platform Engineer
+    - דבאופס
+    - מהנדס תשתיות
+    - ג'וניור דבאופס
+
+  exclude_keywords:
+    - Senior
+    - Team Lead
+    - Head of
+    - Manager
+    - 5+ years
+    - 10+ years
+    - בכיר
+    - ראש צוות
+    - מנהל
+
+  seniority:
+    # Any digit N >= this, followed by "+ years" / "+ שנות ניסיון" (or close
+    # variants), excludes the listing. Junior/entry-level/0-2 years is fine.
+    min_years_to_exclude: 3
+
+  locations:
+    primary:
+      - Rehovot
+      - רחובות
+      - Jerusalem
+      - ירושלים
+      - Tel Aviv
+      - תל אביב
+      - Center
+      - מרכז
+    # If a listing isn't in a primary location, it's still accepted when it
+    # mentions one of these — otherwise it's filtered out as too-far on-site.
+    remote_hybrid_keywords:
+      - Hybrid
+      - היברידי
+      - היברידית
+      - Remote
+      - מהבית
+      - מרחוק
+      - עבודה מהבית
+
+polling:
+  interval_minutes: 10
+  jitter_minutes: 2.5 # +/- randomized around interval_minutes
+  site_stagger_seconds_min: 5 # random delay before each site's scrape run
+  site_stagger_seconds_max: 45
+  min_request_delay_seconds: 2.0 # rate limit *within* a site
+  max_request_delay_seconds: 3.5
+
+anti_blocking:
+  user_agents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  backoff_cycles_on_block: 6 # ~1h at the default 10-min interval
+  respect_robots_txt: true
+
+notifications:
+  # Which channel(s) send a match: "telegram", "whatsapp", or both. Each
+  # active channel needs its own credentials in .env (see .env.example).
+  channels:
+    - telegram
+    - whatsapp
+
+telegram:
+  parse_mode: "HTML"
+
+whatsapp:
+  # Meta Graph API version for the Cloud API. Bump as Meta deprecates old ones.
+  api_version: "v21.0"
+
+summary:
+  # Used only to build the short notification summary (heuristic, no LLM —
+  # that's Phase 3). Tools/skills from this list found in a listing's text
+  # get called out; doesn't affect matching/filtering.
+  known_tools:
+    - AWS
+    - EKS
+    - IAM
+    - S3
+    - Route53
+    - Bedrock
+    - Secrets Manager
+    - Terraform
+    - Docker
+    - Kubernetes
+    - GitOps
+    - ArgoCD
+    - GitHub Actions
+    - Jenkins
+    - Ansible
+    - Linux
+    - RHEL
+    - Ubuntu
+    - Prometheus
+    - Grafana
+    - Python
+    - Bash
+    - CI/CD
+    - Azure
+    - GCP
+  max_chars: 300
+
+database:
+  path: "data/jobbot.sqlite3"
+
+logging:
+  level: "INFO"

@@ -1,0 +1,28 @@
+services:
+  job-bot:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      # Writable (not :ro) -- the dashboard service edits config.yaml here
+      # and the scraper picks it up on its next cycle. In k8s this same
+      # relationship is a shared PVC instead (see k8s/dashboard.yaml).
+      - ./config:/app/config
+    # Local testing runs the persistent jittered loop instead of the
+    # k8s CronJob's one-shot --once mode. First cycle runs immediately.
+    command: []
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    restart: unless-stopped

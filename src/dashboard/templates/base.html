@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}בוט חיפוש עבודה{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="container">
+    <nav class="topnav glass">
+      <div class="topnav__brand">💼 בוט חיפוש עבודה</div>
+      <div class="topnav__links">
+        <a href="/jobs" class="{{ 'active' if active_page == 'jobs' else '' }}">משרות</a>
+        <a href="/sites" class="{{ 'active' if active_page == 'sites' else '' }}">אתרים</a>
+        <a href="/cvs" class="{{ 'active' if active_page == 'cvs' else '' }}">קורות חיים</a>
+        <a href="/settings" class="{{ 'active' if active_page == 'settings' else '' }}">הגדרות</a>
+      </div>
+      <div class="topnav__scanner">
+        <span class="badge status-{{ 'paused' if is_paused else 'active' }}">{{ 'מושהה' if is_paused else 'פעיל' }}</span>
+        <form method="post" action="/scraper/scan">
+          <button type="submit" class="btn secondary" {{ "disabled" if scan_running else "" }}>
+            {{ "🔄 סורק…" if scan_running else "🔍 סרוק עכשיו" }}
+          </button>
+        </form>
+        <form method="post" action="/scraper/{{ 'resume' if is_paused else 'pause' }}">
+          <button type="submit" class="btn secondary">{{ "▶️ הפעל" if is_paused else "⏸️ השהה" }}</button>
+        </form>
+      </div>
+    </nav>
+    {% block content %}{% endblock %}
+  </div>
+</body>
+</html>

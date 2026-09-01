@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}אתרים | בוט חיפוש עבודה{% endblock %}
+{% block content %}
+
+<div class="glass">
+  <h1>אתרי חיפוש עבודה</h1>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>שם</th>
+          <th>כתובת בסיס</th>
+          <th>סטטוס</th>
+          <th>סורק קיים</th>
+          <th>בדיקה אחרונה</th>
+          <th>שגיאה אחרונה</th>
+          <th>הערות</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for site in sites %}
+        <tr>
+          <td>{{ site['display_name'] }} <span class="muted">({{ site['name'] }})</span></td>
+          <td>{{ site['base_url'] or '' }}</td>
+          <td><span class="badge status-{{ site['status'] }}">{{ 'פעיל' if site['status'] == 'active' else 'מושהה' }}</span></td>
+          <td>{{ 'כן' if site['has_scraper'] else 'ממתין לסורק' }}</td>
+          <td class="muted">{{ site['last_checked_at'] or 'טרם נבדק' }}</td>
+          <td class="muted">{{ site['last_error'] or '' }}</td>
+          <td class="muted">{{ site['notes'] or '' }}</td>
+          <td class="flex">
+            <form method="post" action="/sites/{{ site['name'] }}/toggle">
+              <button type="submit" class="btn secondary">{{ 'השהה' if site['status'] == 'active' else 'הפעל' }}</button>
+            </form>
+            <form method="post" action="/sites/{{ site['name'] }}/delete" onsubmit="return confirm('להסיר את {{ site['display_name'] }} מהרשימה?');">
+              <button type="submit" class="btn danger">הסר</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="glass">
+  <h2>הוספת אתר חדש</h2>
+  <p class="muted">הוספת אתר כאן רק רושמת אותו כ"ממתין לסורק". עדיין צריך לכתוב מודול סריקה בקוד עבורו לפני שהוא יתחיל לרוץ.</p>
+  <form method="post" action="/sites/add">
+    <div class="form-row">
+      <div class="field">
+        <label for="name">מזהה (אנגלית, ללא רווחים)</label>
+        <input type="text" name="name" id="name" required>
+      </div>
+      <div class="field">
+        <label for="display_name">שם תצוגה</label>
+        <input type="text" name="display_name" id="display_name" required>
+      </div>
+      <div class="field">
+        <label for="base_url">כתובת בסיס</label>
+        <input type="text" name="base_url" id="base_url" placeholder="https://...">
+      </div>
+    </div>
+    <div class="field">
+      <label for="notes">הערות</label>
+      <input type="text" name="notes" id="notes">
+    </div>
+    <button type="submit" class="btn">הוסף אתר</button>
+  </form>
+</div>
+
+{% endblock %}

@@ -1,0 +1,551 @@
+/* Job Bot Dashboard -- RTL, green palette, "liquid glass" panels.
+   The frosted-glass effect below is a hand-rolled web approximation
+   (backdrop-filter + layered borders + highlight overlay), not Apple's
+   native Liquid Glass material -- there is no public web package for that.
+   A solid-fill fallback is provided under prefers-reduced-transparency. */
+
+:root {
+  --bg: #e7f1ec;
+  /* A proper aurora mesh, not a barely-there tint -- this is what the glass
+     panels actually blur/refract. Flat backgrounds are why glass reads as
+     plain white boxes: there's nothing behind them worth distorting.
+     Alphas are tuned so worst-case text contrast (a panel positioned
+     directly over a blob peak) still clears 4.5:1 -- verified against
+     text-muted/accent-strong/badge-interview, the tightest cases. */
+  --bg-image:
+    radial-gradient(ellipse 900px 700px at 6% -8%, rgba(6, 95, 66, 0.26), transparent 55%),
+    radial-gradient(ellipse 820px 820px at 106% 12%, rgba(52, 211, 153, 0.24), transparent 55%),
+    radial-gradient(ellipse 760px 700px at 46% 112%, rgba(14, 143, 102, 0.20), transparent 60%),
+    radial-gradient(ellipse 520px 460px at 88% 92%, rgba(6, 95, 66, 0.14), transparent 55%);
+  --surface: rgba(255, 255, 255, 0.46);
+  --surface-solid: #ffffff;
+  --border: rgba(15, 30, 24, 0.10);
+  --border-strong: rgba(15, 30, 24, 0.16);
+  --text: #142620;
+  --text-muted: #4c5f57;
+  --accent: #0e8f66;
+  --accent-strong: #076b4c;
+  --accent-contrast: #ffffff;
+  --danger: #a3271e;
+  --radius: 14px;
+  --radius-sm: 8px;
+  --shadow: 0 24px 60px -12px rgba(6, 95, 66, 0.22), 0 8px 20px -6px rgba(6, 95, 66, 0.14);
+  --shadow-sm: 0 10px 26px -8px rgba(6, 95, 66, 0.16), 0 3px 8px -2px rgba(6, 95, 66, 0.10);
+  --grain-opacity: 0.035;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a1310;
+    --bg-image:
+      radial-gradient(ellipse 900px 700px at 6% -8%, rgba(52, 211, 153, 0.18), transparent 55%),
+      radial-gradient(ellipse 820px 820px at 106% 12%, rgba(16, 185, 129, 0.16), transparent 55%),
+      radial-gradient(ellipse 760px 700px at 46% 112%, rgba(6, 95, 66, 0.26), transparent 60%),
+      radial-gradient(ellipse 520px 460px at 88% 92%, rgba(52, 211, 153, 0.10), transparent 55%);
+    --surface: rgba(255, 255, 255, 0.08);
+    --surface-solid: #101c17;
+    --border: rgba(255, 255, 255, 0.10);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text: #eaf3ee;
+    --text-muted: #a7beb2;
+    --accent: #34d399;
+    --accent-strong: #10b981;
+    --accent-contrast: #06281c;
+    --danger: #f2897d;
+    --shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.55), 0 8px 20px -6px rgba(0, 0, 0, 0.4);
+    --shadow-sm: 0 10px 26px -8px rgba(0, 0, 0, 0.45), 0 3px 8px -2px rgba(0, 0, 0, 0.3);
+    --grain-opacity: 0.05;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  /* NOT the `background:` shorthand -- a background-color is only valid in
+     the LAST comma-separated layer of a multi-gradient shorthand, so
+     "var(--bg) var(--bg-image)" silently invalidates the whole declaration
+     and the entire background disappears. Split into longhands instead. */
+  background-color: var(--bg);
+  background-image: var(--bg-image);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans Hebrew", Arial, sans-serif;
+  line-height: 1.5;
+  min-height: 100vh;
+  position: relative;
+}
+
+/* Subtle fixed grain over the whole page for a tactile, less "flat CSS"
+   finish -- fixed + pointer-events:none so it never repaints on scroll. */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  pointer-events: none;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+a {
+  color: var(--accent-strong);
+}
+
+.container {
+  max-width: 1100px;
+  margin-inline: auto;
+  padding: 0 16px 48px;
+}
+
+/* --- Top nav ------------------------------------------------------------ */
+
+.topnav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  margin-bottom: 24px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  /* Apple's Liquid Glass reserves this material for the *functional* layer
+     (nav/toolbars) floating above content, and content-layer panels ideally
+     wouldn't use it at all -- job-bot-spec.md explicitly asks for frosted
+     glass on content cards too, so that's kept, but the nav is given more
+     opacity/blur than content .glass panels to preserve some hierarchy
+     between "floating controls" and "content" (apple-design-skill review). */
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+}
+
+.topnav.glass {
+  background: color-mix(in srgb, var(--surface) 85%, var(--surface-solid) 15%);
+}
+
+.topnav__brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+}
+
+.topnav__links {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.topnav__links a {
+  padding: 8px 14px;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  font-weight: 600;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.topnav__links a:hover,
+.topnav__links a.active {
+  /* accent-strong, not accent: accent+white text measures 4.09:1, below the
+     4.5:1 WCAG AA minimum for text under 18pt (apple-design-skill review) */
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+}
+
+.topnav__scanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.topnav__scanner form {
+  display: inline-flex;
+}
+
+.topnav__scanner .btn {
+  padding: 7px 12px;
+  font-size: 0.82rem;
+}
+
+.topnav__scanner .btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* --- Liquid glass panel --------------------------------------------------- */
+
+.glass {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  backdrop-filter: blur(26px) saturate(200%);
+  -webkit-backdrop-filter: blur(26px) saturate(200%);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.4), inset 0 -1px 0 rgba(6, 40, 28, 0.04);
+  padding: 22px;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  .glass {
+    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    background: var(--surface-solid);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+.glass + .glass {
+  margin-top: 16px;
+}
+
+h1, h2, h3 {
+  margin-top: 0;
+  font-weight: 700;
+}
+
+h1 {
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: 1.2rem;
+  padding-inline-start: 12px;
+  border-inline-start: 3px solid var(--accent);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* --- Stat strip ----------------------------------------------------------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stat {
+  text-align: center;
+  padding: 12px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  transition: transform 0.15s ease;
+}
+
+.stat:hover {
+  transform: translateY(-2px);
+}
+
+.stat .num {
+  font-size: 1.4rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-strong);
+}
+
+.stat .label {
+  font-size: 0.85rem; /* was 0.78rem (~9.4pt) -- below Apple's 10pt desktop minimum */
+  color: var(--text-muted);
+}
+
+/* --- Filters / forms -------------------------------------------------------- */
+
+.filters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+}
+
+select, input[type="text"], input[type="date"], input[type="number"], input[type="file"], textarea {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-solid);
+  color: var(--text);
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+
+select:focus, input:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+/* --- Buttons ---------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-decoration: none;
+  box-shadow: 0 6px 16px -6px rgba(6, 95, 66, 0.5);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px -6px rgba(6, 95, 66, 0.55);
+}
+
+.btn:active {
+  transform: scale(0.98);
+  box-shadow: 0 4px 10px -6px rgba(6, 95, 66, 0.5);
+}
+
+.btn.secondary {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.btn.secondary:hover {
+  background: var(--surface-solid);
+}
+
+.btn.danger {
+  background: var(--danger);
+  box-shadow: 0 6px 16px -6px rgba(163, 39, 30, 0.5);
+}
+
+.btn.danger:hover {
+  box-shadow: 0 10px 22px -6px rgba(163, 39, 30, 0.55);
+}
+
+/* --- Job cards / table ------------------------------------------------------- */
+
+.job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.job-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.job-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.job-card__title {
+  font-weight: 700;
+  font-size: 1.02rem;
+}
+
+.job-card__meta {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem; /* was 0.75rem (9pt) -- below Apple's 10pt desktop minimum */
+  font-weight: 700;
+  border: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+
+.badge.status-found { color: var(--text-muted); }
+.badge.status-applied { color: var(--accent-strong); border-color: var(--accent); }
+.badge.status-interview { color: #7a5c00; border-color: #d4a72c; }
+.badge.status-offer { color: var(--accent-strong); border-color: var(--accent); background: rgba(16,143,102,0.12); }
+.badge.status-rejected { color: var(--danger); border-color: var(--danger); }
+.badge.status-active { color: var(--accent-strong); border-color: var(--accent); }
+.badge.status-paused { color: var(--text-muted); }
+
+/* --- Tag input --------------------------------------------------------------- */
+
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-solid);
+}
+
+.tag-input__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  /* accent-strong, not accent: see .topnav__links a.active above */
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.tag-input__chip button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.tag-input__field {
+  flex: 1;
+  min-width: 120px;
+  border: none;
+  background: transparent;
+  padding: 6px;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.tag-input__field:focus {
+  outline: none;
+}
+
+/* --- Sites / CVs tables ------------------------------------------------------- */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: start;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+th {
+  color: var(--text-muted);
+  font-size: 0.85rem; /* was 0.78rem (~9.4pt) -- below Apple's 10pt desktop minimum */
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+tbody tr {
+  transition: background 0.12s ease;
+}
+
+tbody tr:hover {
+  background: var(--surface);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+/* --- Utility ------------------------------------------------------------------ */
+
+.flex {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+  .job-card {
+    grid-template-columns: 1fr;
+  }
+  .topnav {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  /* .btn is ~37px tall by default -- above Apple's 28pt mobile minimum but
+     below the 44pt mobile default touch target. Bumped on small viewports
+     only, since desktop already clears the (lower) desktop targets. */
+  .btn {
+    padding: 13px 18px;
+  }
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 16px;
+  color: var(--text-muted);
+}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ job['title'] }} | בוט חיפוש עבודה{% endblock %}
+{% block content %}
+
+<a href="/jobs" class="btn secondary" style="margin-bottom:16px">→ חזרה למשרות</a>
+
+<div class="glass">
+  <h1>{{ job['title'] }}</h1>
+  <p class="muted">
+    {{ job['company'] or 'חברה לא ידועה' }} · {{ job['location'] or '' }} ·
+    {% if job['work_mode'] == 'remote' %}מרחוק{% elif job['work_mode'] == 'hybrid' %}היברידי{% else %}במשרד{% endif %}
+    · אתר: {{ job['source_site'] }} · נמצא: {{ job['found_at'][:16] }}
+  </p>
+  <a class="btn" href="{{ job['url'] }}" target="_blank" rel="noopener">פתח מודעה מקורית ↗</a>
+  {% if job['description'] %}
+  <details style="margin-top:16px">
+    <summary style="cursor:pointer;font-weight:700">תיאור מלא</summary>
+    <p style="white-space:pre-wrap;margin-top:10px">{{ job['description'] }}</p>
+  </details>
+  {% endif %}
+</div>
+
+<div class="glass">
+  <h2>מעקב הגשה</h2>
+  <form method="post" action="/jobs/{{ job['id'] }}">
+    <div class="form-row">
+      <div class="field">
+        <label for="status">סטטוס</label>
+        <select name="status" id="status">
+          {% for s in status_options %}
+          <option value="{{ s }}" {{ "selected" if (job['status'] or 'found') == s }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="date_applied">תאריך הגשה</label>
+        <input type="date" name="date_applied" id="date_applied" value="{{ job['date_applied'] or '' }}">
+      </div>
+      <div class="field">
+        <label for="cv_version_used">גרסת קורות חיים</label>
+        <select name="cv_version_used" id="cv_version_used">
+          <option value="">לא נבחר</option>
+          {% for cv in cvs %}
+          <option value="{{ cv['label'] }}" {{ "selected" if job['cv_version_used'] == cv['label'] }}>{{ cv['label'] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label for="cover_letter">מכתב מקדים</label>
+      <textarea name="cover_letter" id="cover_letter">{{ job['cover_letter'] or '' }}</textarea>
+    </div>
+    <div class="field">
+      <label for="notes">הערות</label>
+      <textarea name="notes" id="notes">{{ job['notes'] or '' }}</textarea>
+    </div>
+    <button type="submit" class="btn">שמור</button>
+  </form>
+</div>
+
+{% endblock %}

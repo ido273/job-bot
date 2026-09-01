@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}הגדרות | בוט חיפוש עבודה{% endblock %}
+{% block content %}
+
+<div class="glass">
+  <h1>קריטריוני התאמה</h1>
+  <p class="muted">שינויים כאן נשמרים ל-config.yaml ונכנסים לתוקף במחזור הסריקה הבא (עד כ-10 דקות), בלי צורך בפריסה מחדש.</p>
+  <form method="post" action="/settings/matching">
+    <div class="field">
+      <label>מילות מפתח לתפקיד (התאמה לכל אחת)</label>
+      <div class="tag-input" data-tag-input data-placeholder="הקלד ו-Enter">
+        <textarea name="role_keywords" data-tag-storage hidden>{{ matching.role_keywords | join('\n') }}</textarea>
+      </div>
+    </div>
+    <div class="field">
+      <label>מילות החרגה</label>
+      <div class="tag-input" data-tag-input data-placeholder="הקלד ו-Enter">
+        <textarea name="exclude_keywords" data-tag-storage hidden>{{ matching.exclude_keywords | join('\n') }}</textarea>
+      </div>
+    </div>
+    <div class="field" style="max-width:220px">
+      <label for="min_years_to_exclude">שנות ניסיון מקסימום (מעל זה: מוחרג)</label>
+      <input type="number" name="min_years_to_exclude" id="min_years_to_exclude" min="0" value="{{ matching.min_years_to_exclude }}">
+    </div>
+    <div class="field">
+      <label>מיקומים עיקריים</label>
+      <div class="tag-input" data-tag-input data-placeholder="הקלד ו-Enter">
+        <textarea name="primary_locations" data-tag-storage hidden>{{ matching.primary_locations | join('\n') }}</textarea>
+      </div>
+    </div>
+    <div class="field">
+      <label>מילות מפתח היברידי / מרחוק</label>
+      <div class="tag-input" data-tag-input data-placeholder="הקלד ו-Enter">
+        <textarea name="remote_hybrid_keywords" data-tag-storage hidden>{{ matching.remote_hybrid_keywords | join('\n') }}</textarea>
+      </div>
+    </div>
+    <button type="submit" class="btn">שמור קריטריונים</button>
+  </form>
+</div>
+
+<div class="glass">
+  <h2>כללי התראות</h2>
+  <p class="muted">מצב אחד פעיל בכל רגע נתון, אבל ניתן לעבור ביניהם בלי לאבד את הפרמטרים של המצבים האחרים.</p>
+  <form method="post" action="/settings/notifications" id="notif-form">
+    <div class="field">
+      <label><input type="radio" name="notification_mode" value="immediate" {{ "checked" if settings.notification_mode == "immediate" }} onchange="updateNotifModeVisibility()"> שליחה מיידית עבור כל התאמה (ברירת מחדל)</label>
+      <label><input type="radio" name="notification_mode" value="rate_limited" {{ "checked" if settings.notification_mode == "rate_limited" }} onchange="updateNotifModeVisibility()"> הגבלת קצב: עד N התראות בשעה</label>
+      <label><input type="radio" name="notification_mode" value="digest" {{ "checked" if settings.notification_mode == "digest" }} onchange="updateNotifModeVisibility()"> תקציר: הודעה מרוכזת כל X דקות</label>
+      <label><input type="radio" name="notification_mode" value="count_batch" {{ "checked" if settings.notification_mode == "count_batch" }} onchange="updateNotifModeVisibility()"> אצווה: שליחה לאחר שנצברו M התאמות חדשות</label>
+    </div>
+
+    <div class="form-row">
+      <div class="field" id="param-rate_limited">
+        <label for="rate_limit_per_hour">התראות מותרות לשעה (N)</label>
+        <input type="number" name="rate_limit_per_hour" id="rate_limit_per_hour" min="1" value="{{ settings.rate_limit_per_hour }}">
+      </div>
+      <div class="field" id="param-digest">
+        <label for="digest_minutes">דקות בין תקצירים (X)</label>
+        <input type="number" name="digest_minutes" id="digest_minutes" min="1" value="{{ settings.digest_minutes }}">
+      </div>
+      <div class="field" id="param-count_batch">
+        <label for="batch_count">מספר התאמות לאצווה (M)</label>
+        <input type="number" name="batch_count" id="batch_count" min="1" value="{{ settings.batch_count }}">
+      </div>
+    </div>
+    <button type="submit" class="btn">שמור כללי התראות</button>
+  </form>
+</div>
+
+<script>
+  function updateNotifModeVisibility() {
+    const mode = document.querySelector('input[name="notification_mode"]:checked').value;
+    ["rate_limited", "digest", "count_batch"].forEach((m) => {
+      document.getElementById("param-" + m).style.opacity = (m === mode) ? "1" : "0.4";
+    });
+  }
+  document.addEventListener("DOMContentLoaded", updateNotifModeVisibility);
+</script>
+
+{% endblock %}
