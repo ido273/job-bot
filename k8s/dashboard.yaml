@@ -31,7 +31,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: dashboard
-          image: job-bot-dashboard:latest # overwritten by .github/workflows/deploy.yml on every push to main
+          image: ghcr.io/ido273/job-bot-dashboard:99815bc # overwritten by .github/workflows/deploy.yml on every push to main
           ports:
             - containerPort: 8000
           env:
@@ -54,7 +54,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: job-bot-data
-
 ---
 apiVersion: v1
 kind: Service
@@ -69,7 +68,6 @@ spec:
     - port: 8000
       targetPort: 8000
       nodePort: 30080
-
 # --- Ingress alternative (uncomment if you already run an ingress controller) ---
 # apiVersion: networking.k8s.io/v1
 # kind: Ingress

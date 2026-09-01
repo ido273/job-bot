@@ -28,7 +28,6 @@ spec:
     requests:
       storage: 1Gi
   # storageClassName: local-path  # uncomment/adjust for your k3s storage class
-
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -60,7 +59,7 @@ spec:
             - name: ghcr-secret
           containers:
             - name: job-bot
-              image: job-bot-scraper:latest # overwritten by .github/workflows/deploy.yml on every push to main
+              image: ghcr.io/ido273/job-bot-scraper:99815bc # overwritten by .github/workflows/deploy.yml on every push to main
               args: ["--once"]
               env:
                 - name: CONFIG_PATH
