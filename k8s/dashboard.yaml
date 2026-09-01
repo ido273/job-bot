@@ -23,6 +23,12 @@ spec:
       labels:
         app: job-bot-dashboard
     spec:
+      # This repo is private, so GHCR packages built from it are private by
+      # default too -- the cluster needs credentials to pull. ghcr-secret
+      # is created manually (kubectl create secret docker-registry), not
+      # by this repo/ArgoCD, since it holds a real credential.
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: dashboard
           image: job-bot-dashboard:latest # overwritten by .github/workflows/deploy.yml on every push to main

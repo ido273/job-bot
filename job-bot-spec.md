@@ -482,12 +482,11 @@ unit), and end with a direct, confident closing.
 > ArgoCD (once installed) watches that path and syncs the cluster.
 > GitHub Actions never talks to the cluster directly.
 >
-> **Not yet live**: no k3s cluster exists yet (a new Proxmox VM is being
-> set up in parallel), so ArgoCD itself hasn't been installed, and the
-> `k8s/argocd-application.yaml` Application resource hasn't been applied
-> or tested against a real cluster. Everything else — both workflow jobs,
-> the image builds, the manifest-update logic — was tested for real
-> against GHCR and this repo, since neither of those needs a cluster.
+> **Update 2026-09-01, later same day**: the k3s VM exists now, ArgoCD is
+> installed and syncing this repo's `k8s/` path for real. First real sync
+> caught a real bug — see "Incident: everything synced to the wrong
+> namespace" below — now fixed, still on the `feature/ci-cd-argocd-deploy`
+> branch (PR #1) pending merge.
 
 ### Workflow: `.github/workflows/deploy.yml`
 
@@ -556,6 +555,44 @@ Application's `destination.namespace: job-bot` (an explicit namespace in
 a manifest wins over the Application-level default) — updated all of
 them to `namespace: job-bot` so there's no mismatch between what the
 Application targets and what the manifests actually say.
+
+### Incident: everything synced to the wrong namespace
+
+The `namespace: default` fix above was made *before* ArgoCD ever ran
+(anticipated while writing the Application manifest) but landed only on
+the still-open `feature/ci-cd-argocd-deploy` branch. The Application's
+`targetRevision: main` means it synced whatever was actually on `main`
+— which was the pre-fix manifests — so the predicted bug happened for
+real anyway: `kubectl get application job-bot -n argocd -o
+jsonpath='{.status.resources}'` showed every resource (Deployment,
+Service, CronJob, PVC) created in `default`, not `job-bot`. Lesson: a
+fix sitting in an unmerged PR provides zero protection — what matters is
+what's actually on the branch ArgoCD points at.
+
+Two more things came out of chasing this down:
+
+- **`imagePullSecrets` was never wired in.** This repo is private, so
+  GHCR images built from it are private packages by default too — pods
+  need a pull credential. A `ghcr-secret` (docker-registry type) had
+  been created manually in the `job-bot` namespace but no pod spec
+  referenced it. Added `imagePullSecrets: [{name: ghcr-secret}]` to both
+  the CronJob's and the Deployment's pod spec. This secret is
+  deliberately *not* templated in `k8s/` the way `job-bot-secrets` has
+  `secret.example.yaml` — a docker-registry secret's `.dockerconfigjson`
+  isn't meaningfully hand-authorable as a YAML template, so the exact
+  `kubectl create secret docker-registry` command is documented in
+  README's k3s deploy section instead.
+- **No images had ever actually been built.** `.github/workflows/`
+  doesn't exist on `main` yet either (same unmerged-PR problem), so the
+  workflow has literally never run — confirmed via `gh api
+  /user/packages/container/...` returning 404 for both image names, and
+  `gh run list` showing no runs of this workflow, ever. Merging PR #1 is
+  what actually starts producing images, not just fixing the namespace.
+
+Broader audit (image names, ports, secret/PVC name references across
+every file in `k8s/` and the workflow) turned up nothing else — the
+namespace field was the only hardcoded value that had drifted from what
+another file assumed.
 
 ---
 

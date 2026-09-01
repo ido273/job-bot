@@ -51,6 +51,13 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          # This repo is private, so GHCR packages built from it are
+          # private by default too -- the cluster needs credentials to
+          # pull. ghcr-secret is created manually (kubectl create secret
+          # docker-registry), not by this repo/ArgoCD, since it holds a
+          # real credential.
+          imagePullSecrets:
+            - name: ghcr-secret
           containers:
             - name: job-bot
               image: job-bot-scraper:latest # overwritten by .github/workflows/deploy.yml on every push to main

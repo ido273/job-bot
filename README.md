@@ -134,12 +134,37 @@ docker compose logs -f
 
 ### 6. Deploy to k3s (primary target)
 
+This repo is private, so the images GitHub Actions builds (Phase 4) are
+private GHCR packages too — the cluster needs a pull credential before
+`cronjob.yaml`/`dashboard.yaml` will actually run (otherwise: pods stuck
+`ImagePullBackOff`). Create it once, manually — it holds a real
+credential, so unlike everything else in `k8s/` it's not something ArgoCD
+manages or this repo templates:
+
+```bash
+# PAT needs read:packages scope: https://github.com/settings/tokens
+kubectl create namespace job-bot
+kubectl create secret docker-registry ghcr-secret \
+  --namespace job-bot \
+  --docker-server=ghcr.io \
+  --docker-username=<your-github-username> \
+  --docker-password=<a PAT with read:packages> \
+  --docker-email=<your-email>
+```
+
+Then:
+
 ```bash
 cp k8s/secret.example.yaml k8s/secret.yaml   # fill in real values (Telegram/WhatsApp/dashboard auth)
-kubectl apply -f k8s/secret.yaml
+kubectl apply -n job-bot -f k8s/secret.yaml
 kubectl apply -f k8s/cronjob.yaml
 kubectl apply -f k8s/dashboard.yaml
 ```
+
+(Once ArgoCD is syncing this repo, as in Phase 4 below, ArgoCD applies
+`cronjob.yaml`/`dashboard.yaml` for you — the `ghcr-secret` and
+`k8s/secret.yaml` steps above are still manual either way, since both
+hold real credentials that never belong in git.)
 
 The CronJob fires every 10 minutes; the container adds its own random
 jitter on top before actually scraping (see `polling.jitter_minutes` in
