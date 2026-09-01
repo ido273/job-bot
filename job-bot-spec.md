@@ -475,6 +475,90 @@ unit), and end with a direct, confident closing.
 
 ---
 
+## Phase 4 — CI/CD: GitHub Actions + ArgoCD
+
+> **Built 2026-09-01.** GitHub Actions builds and pushes both container
+> images on every push to `main` and updates the image tags in `k8s/`;
+> ArgoCD (once installed) watches that path and syncs the cluster.
+> GitHub Actions never talks to the cluster directly.
+>
+> **Not yet live**: no k3s cluster exists yet (a new Proxmox VM is being
+> set up in parallel), so ArgoCD itself hasn't been installed, and the
+> `k8s/argocd-application.yaml` Application resource hasn't been applied
+> or tested against a real cluster. Everything else — both workflow jobs,
+> the image builds, the manifest-update logic — was tested for real
+> against GHCR and this repo, since neither of those needs a cluster.
+
+### Workflow: `.github/workflows/deploy.yml`
+
+Two jobs:
+
+1. **`build-and-push`** — checks out the repo, logs into GHCR with the
+   built-in `GITHUB_TOKEN` (no PAT needed), and builds+pushes both
+   images (`Dockerfile` → `ghcr.io/<owner>/job-bot-scraper`,
+   `Dockerfile.dashboard` → `ghcr.io/<owner>/job-bot-dashboard`), each
+   tagged with the short git SHA. Scoped to `permissions: packages:
+   write` (plus the `contents: read` every job gets by default) — it
+   never needs to write back to the repo.
+2. **`update-manifest`** (`needs: build-and-push`) — checks out `main`,
+   installs a pinned `yq` binary, rewrites the `image:` field in
+   `k8s/cronjob.yaml` and `k8s/dashboard.yaml` to the SHA just built,
+   commits, and pushes. Scoped to `permissions: contents: write` — it
+   never touches GHCR.
+
+Why two jobs instead of one: the permission split is the actual reason
+(`packages: write` and `contents: write` are each handed to only the job
+that needs it, not both to everything), not just organization.
+
+**A real bug caught before it shipped**: both `k8s/cronjob.yaml` (PVC +
+CronJob) and `k8s/dashboard.yaml` (Deployment + Service) are
+multi-document YAML files. A plain `yq -i '.spec...' file.yaml` applies
+to *every* document in the file — tested locally, and it silently
+fabricated a bogus nested `spec.template.spec.containers[0].image` block
+inside the PVC and the Service (documents that have no such path, so yq
+auto-vivified one). Fixed with document-index scoping —
+`(select(di == 1) | .spec...) = "..."` — so the update only ever touches
+the one document that actually has that field. This is why the workflow
+comment says "verified locally" next to that step: it was, and the
+naive version really did corrupt both files before the fix.
+
+**Trigger-loop guard, two independent layers**: `update-manifest`'s own
+commit only touches files under `k8s/`, and the workflow's trigger has
+`paths-ignore: ["k8s/**"]` — so that commit shouldn't re-trigger the
+workflow at all. The commit message also carries `[skip ci]`, which
+GitHub Actions honors independently of path filtering. Either mechanism
+alone would prevent the loop; both together means one failing silently
+(e.g. someone editing the paths-ignore list without noticing) doesn't
+immediately create one.
+
+**No self-hosted runner**: GitHub's standard hosted `ubuntu-latest`
+runners are used for both jobs. Nothing in this pipeline needs to reach
+the k3s cluster — job 1 talks to GHCR, job 2 talks to this git repo, both
+ordinary internet endpoints a hosted runner can reach with zero network
+setup. The cluster side is entirely ArgoCD's job: it pulls from git, the
+pipeline never pushes to it. That separation is *why* a self-hosted
+runner was never a requirement here.
+
+### ArgoCD: `k8s/argocd-application.yaml`
+
+Points at this repo's `k8s/` path on `main`, targets the **`job-bot`**
+namespace (created automatically via `syncOptions: [CreateNamespace=true]`
+if it doesn't exist), with `automated: {prune: true, selfHeal: true}` —
+sync on every change, remove resources ArgoCD manages that disappear from
+`k8s/`, and revert manual `kubectl edit` drift back to what's in git.
+`directory.exclude` skips `secret.example.yaml` (placeholder values only,
+never meant to be applied) and the Application manifest itself (applying
+an Application resource via its own sync would be circular).
+
+This changed the manifests themselves too: every resource in `k8s/` had
+`namespace: default` hardcoded, which would have silently overridden the
+Application's `destination.namespace: job-bot` (an explicit namespace in
+a manifest wins over the Application-level default) — updated all of
+them to `namespace: job-bot` so there's no mismatch between what the
+Application targets and what the manifests actually say.
+
+---
+
 ## Suggested order of operations
 
 1. Send **Phase 1** prompt to Claude Code. Test that it actually sends you a real Telegram message for a real AllJobs listing before moving on.

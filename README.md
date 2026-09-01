@@ -266,6 +266,31 @@ since it's an explicit request, not a scheduled one. Both a bot command
 and a dashboard-click "Scan now" share one lock, so overlapping requests
 no-op instead of running two scrapes at once.
 
+## Phase 4 — CI/CD: GitHub Actions + ArgoCD (built, ArgoCD side not yet live)
+
+Push to `main` → GitHub Actions builds+pushes both images to GHCR
+(`ghcr.io/<owner>/job-bot-scraper`, `ghcr.io/<owner>/job-bot-dashboard`,
+tagged with the short SHA) → a second job updates the image tags in
+`k8s/cronjob.yaml` and `k8s/dashboard.yaml` and commits that back →
+ArgoCD (once installed) picks up the change and syncs the cluster.
+GitHub Actions never touches the cluster directly, so it's plain hosted
+runners the whole way — see `job-bot-spec.md`'s Phase 4 section for the
+full breakdown (the two-job permission split, the multi-document-YAML
+bug the manifest-update step had to work around, the trigger-loop
+double guard).
+
+**Not yet live**: no k3s cluster exists yet, so ArgoCD hasn't been
+installed and `k8s/argocd-application.yaml` hasn't been applied. Once
+the cluster's up:
+
+```bash
+# after installing ArgoCD in the cluster (not covered here)
+kubectl apply -f k8s/argocd-application.yaml
+```
+
+It targets the `job-bot` namespace (auto-created), watching this repo's
+`k8s/` path on `main` with auto-sync + self-heal enabled.
+
 ## Non-negotiables (repeated here as a quick check before every phase)
 
 - No secrets or CVs ever committed — `.gitignore` from the first

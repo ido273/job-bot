@@ -1,0 +1,45 @@
+# NOT YET APPLIED OR TESTED against a live cluster -- there is no k3s
+# cluster reachable yet (a new Proxmox VM is being set up in parallel).
+# Written correctly against ArgoCD's Application CRD schema and reviewed,
+# but only `kubectl apply -f k8s/argocd-application.yaml` (once ArgoCD
+# itself is installed on the new cluster) actually proves it out.
+#
+# What this does: ArgoCD watches this repo's k8s/ path on the main branch
+# and applies whatever it finds there to the job-bot namespace, creating
+# it if needed. GitHub Actions' update-manifest job (see
+# .github/workflows/deploy.yml) is what keeps the image tags in that path
+# current -- this Application has no awareness of GHCR or the workflow at
+# all, it only ever looks at what's committed to k8s/.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: job-bot
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/ido273/job-bot.git
+    targetRevision: main
+    path: k8s
+    # This Application manifest and secret.example.yaml both live in k8s/
+    # alongside the real manifests. ArgoCD applies every valid Kubernetes
+    # resource it finds in the path, so secret.example.yaml (all
+    # REPLACE_ME placeholders, never a real secret) needs to stay excluded
+    # -- and this Application manifest excludes itself, since applying an
+    # Application resource via itself is circular. The real k8s/secret.yaml
+    # (gitignored, real values) is applied manually with kubectl, once,
+    # outside ArgoCD's sync -- see README's k3s deploy steps.
+    directory:
+      exclude: "{secret.example.yaml,argocd-application.yaml}"
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: job-bot
+
+  syncPolicy:
+    automated:
+      prune: true # remove resources ArgoCD manages that are no longer in k8s/
+      selfHeal: true # revert manual cluster edits back to what's in git
+    syncOptions:
+      - CreateNamespace=true # job-bot namespace doesn't exist yet either

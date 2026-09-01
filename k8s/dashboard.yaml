@@ -12,7 +12,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: job-bot-dashboard
-  namespace: default
+  namespace: job-bot
 spec:
   replicas: 1
   selector:
@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: dashboard
-          image: job-bot-dashboard:latest # replace with your registry path
+          image: job-bot-dashboard:latest # overwritten by .github/workflows/deploy.yml on every push to main
           ports:
             - containerPort: 8000
           env:
@@ -54,7 +54,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: job-bot-dashboard
-  namespace: default
+  namespace: job-bot
 spec:
   type: NodePort
   selector:
@@ -69,7 +69,7 @@ spec:
 # kind: Ingress
 # metadata:
 #   name: job-bot-dashboard
-#   namespace: default
+#   namespace: job-bot
 # spec:
 #   rules:
 #     - host: jobbot.home.lab  # point this at your k3s node in local DNS/hosts
