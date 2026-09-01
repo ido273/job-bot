@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}קורות חיים | בוט חיפוש עבודה{% endblock %}
+{% block content %}
+
+<div class="glass">
+  <h1>קורות חיים</h1>
+  {% if cvs %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>שם</th><th>תווית</th><th>הועלה</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for cv in cvs %}
+        <tr>
+          <td>{{ cv['filename'] }}</td>
+          <td>{{ cv['label'] }}</td>
+          <td class="muted">{{ cv['uploaded_at'] }}</td>
+          <td>
+            <form method="post" action="/cvs/{{ cv['id'] }}/delete" onsubmit="return confirm('למחוק את {{ cv['label'] }}?');">
+              <button type="submit" class="btn danger">מחק</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">עדיין לא הועלו קורות חיים.</div>
+  {% endif %}
+</div>
+
+<div class="glass">
+  <h2>העלאת קובץ חדש</h2>
+  <p class="muted">PDF או DOCX בלבד, עד 10MB. ניתן להעלות כמה גרסאות ולבחור ביניהן בעת סימון משרה כ"הוגשה".</p>
+  <form method="post" action="/cvs/upload" enctype="multipart/form-data">
+    <div class="form-row">
+      <div class="field">
+        <label for="label">תווית (למשל: "גרסת DevOps")</label>
+        <input type="text" name="label" id="label" required>
+      </div>
+      <div class="field">
+        <label for="file">קובץ</label>
+        <input type="file" name="file" id="file" accept=".pdf,.docx" required>
+      </div>
+    </div>
+    <button type="submit" class="btn">העלה</button>
+  </form>
+</div>
+
+{% endblock %}

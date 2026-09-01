@@ -3,13 +3,13 @@
 k8s/secret.yaml
 
 # Personal data
+# (CV/résumé uploads live under data/cvs/ -- already covered by data/ above.
+# Deliberately not *cv*/*.pdf/*.docx here: those are unscoped substring/
+# extension globs that also match source files like *.html templates
+# containing "cv" -- caught src/dashboard/templates/cvs.html this way once.)
 data/
 *.sqlite3
 *.sqlite3-journal
-*CV*
-*cv*
-*.pdf
-*.docx
 
 # Python
 __pycache__/
