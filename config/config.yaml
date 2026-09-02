@@ -12,8 +12,17 @@ sites:
     # API, so instead of guessing one, we poll verified server-rendered
     # result pages and let matching.role_keywords do the precise filtering.
     # Add more URLs here (e.g. other categories/cities) without touching code.
+    #
+    # position=1706 ("איש DevOps") is the real DevOps category -- verified
+    # live 2026-09-02 (13 fetched, real DevOps titles, 2 matched). The
+    # previous position=1801 was wrong: it returned unrelated management/
+    # IT-technician listings (0 real DevOps postings ever seen), which is
+    # why AllJobs never produced a match despite the matcher itself working
+    # correctly -- found while investigating a "no AllJobs notifications"
+    # report. position=1919 ("Senior DevOps") also exists but is excluded
+    # on purpose (matching.exclude_keywords already filters "Senior").
     search_urls:
-      - "https://www.alljobs.co.il/SearchResultsGuest.aspx?page=1&position=1801&type=&city=&region="
+      - "https://www.alljobs.co.il/SearchResultsGuest.aspx?page=1&position=1706&type=&city=&region="
     robots_txt_url: "https://www.alljobs.co.il/robots.txt"
 
   drushim:
@@ -28,10 +37,13 @@ sites:
     robots_txt_url: "https://www.drushim.co.il/robots.txt"
 
   jobmaster:
-    enabled: false # built in a later Phase 1 step, after AllJobs is verified end-to-end
+    enabled: true
     display_name: "JobMaster"
     base_url: "https://www.jobmaster.co.il"
-    search_urls: []
+    # Plain server-rendered HTML, real freetext query-string search --
+    # verified live 2026-09-02 (10 real DevOps listings).
+    search_urls:
+      - "https://www.jobmaster.co.il/jobs/q-DevOps/"
     robots_txt_url: "https://www.jobmaster.co.il/robots.txt"
 
   dialog:

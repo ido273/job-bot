@@ -27,6 +27,7 @@ from .scrapers.base import BlockedError, SiteScraper
 from .scrapers.dialog import DialogScraper
 from .scrapers.drushim import DrushimScraper
 from .scrapers.gotfriends import GotfriendsScraper
+from .scrapers.jobmaster import JobMasterScraper
 from .scrapers.nisha import NishaScraper
 from .summarizer import summarize_requirements
 
@@ -39,6 +40,7 @@ SCRAPER_CLASSES: dict[str, type[SiteScraper]] = {
     "dialog": DialogScraper,
     "gotfriends": GotfriendsScraper,
     "nisha": NishaScraper,
+    "jobmaster": JobMasterScraper,
 }
 
 # Guards "Scan now" (dashboard button + bot "scan" command) against
