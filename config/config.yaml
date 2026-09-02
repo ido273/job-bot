@@ -34,6 +34,36 @@ sites:
     search_urls: []
     robots_txt_url: "https://www.jobmaster.co.il/robots.txt"
 
+  dialog:
+    enabled: true
+    display_name: "Dialog"
+    base_url: "https://www.dialog.co.il"
+    # Plain server-rendered HTML, dedicated DevOps category page, no
+    # bot-detection cookies observed -- verified live 2026-09-02.
+    search_urls:
+      - "https://www.dialog.co.il/high-tech/jobs/system/devops"
+    robots_txt_url: "https://www.dialog.co.il/robots.txt"
+
+  gotfriends:
+    enabled: true
+    display_name: "Gotfriends"
+    base_url: "https://www.gotfriends.co.il"
+    # Dedicated DevOps category page, plain server-rendered HTML --
+    # verified live 2026-09-02.
+    search_urls:
+      - "https://www.gotfriends.co.il/jobslobby/system/devops-positions/"
+    robots_txt_url: "https://www.gotfriends.co.il/robots.txt"
+
+  nisha:
+    enabled: true
+    display_name: "Nisha"
+    base_url: "https://www.nisha.co.il"
+    # Dedicated DevOps positions page, plain server-rendered WordPress --
+    # verified live 2026-09-02.
+    search_urls:
+      - "https://www.nisha.co.il/positions/devops/"
+    robots_txt_url: "https://www.nisha.co.il/robots.txt"
+
 matching:
   role_keywords:
     - DevOps

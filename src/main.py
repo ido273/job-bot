@@ -24,7 +24,10 @@ from .matcher import is_match
 from .notifiers import NotificationChannel, build_channel, build_channels
 from .scrapers.alljobs import AllJobsScraper
 from .scrapers.base import BlockedError, SiteScraper
+from .scrapers.dialog import DialogScraper
 from .scrapers.drushim import DrushimScraper
+from .scrapers.gotfriends import GotfriendsScraper
+from .scrapers.nisha import NishaScraper
 from .summarizer import summarize_requirements
 
 logger = logging.getLogger("jobbot.main")
@@ -33,6 +36,9 @@ logger = logging.getLogger("jobbot.main")
 SCRAPER_CLASSES: dict[str, type[SiteScraper]] = {
     "alljobs": AllJobsScraper,
     "drushim": DrushimScraper,
+    "dialog": DialogScraper,
+    "gotfriends": GotfriendsScraper,
+    "nisha": NishaScraper,
 }
 
 # Guards "Scan now" (dashboard button + bot "scan" command) against

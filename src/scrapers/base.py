@@ -48,12 +48,26 @@ class SiteScraper(ABC):
         parser = self._robots_cache_parsers().get(robots_url)
         if parser is None:
             parser = urllib.robotparser.RobotFileParser()
-            parser.set_url(robots_url)
+            # NOT parser.read() -- that fetches with urllib's own default
+            # "Python-urllib/3.x" User-Agent, which some sites' CDN/WAF
+            # (confirmed live: Dialog, Gotfriends, both Cloudflare-fronted)
+            # 403s outright even though the exact same path is genuinely
+            # allowed for a real browser UA. Per robotparser's documented
+            # behavior, a 401/403 on the robots.txt fetch itself makes it
+            # conclude "disallow everything" -- a false verdict caused by
+            # the *check's own* request, not the site's actual robots.txt.
+            # Fetching it ourselves with the same realistic headers used
+            # for real requests avoids that trap.
             try:
-                parser.read()
-            except Exception:
-                # If robots.txt can't be fetched, fail open (don't block scraping
-                # on a transient network error) but log via caller.
+                resp = requests.get(robots_url, headers=self._headers(), timeout=10)
+                if resp.status_code == 404:
+                    parser.allow_all = True
+                else:
+                    resp.raise_for_status()
+                    parser.parse(resp.text.splitlines())
+            except requests.RequestException:
+                # If robots.txt genuinely can't be fetched, fail open (don't
+                # block scraping on a transient network error) but log via caller.
                 return True
             self._robots_cache_parsers()[robots_url] = parser
         return parser.can_fetch(self._headers()["User-Agent"], url)
