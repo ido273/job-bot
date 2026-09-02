@@ -17,9 +17,10 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import bot_commands, db, main
+from .. import bot_commands, db, job_actions, main
 from ..config import DEFAULT_CONFIG_PATH, load_config
 from ..logging_setup import setup_logging
+from ..models import Job
 from ..notifiers import build_channel
 from . import config_editor, telegram_poller
 from .auth import require_auth
@@ -118,6 +119,42 @@ def jobs_list(
             **_scanner_context(conn),
         },
     )
+
+
+@app.post("/jobs/add")
+def jobs_add(
+    title: str = Form(...),
+    company: str = Form(""),
+    location: str = Form(""),
+    work_mode: str = Form("onsite"),
+    url: str = Form(...),
+    description: str = Form(""),
+    status: str = Form("found"),
+    conn=Depends(get_conn),
+    _user: str = Depends(require_auth),
+):
+    title = title.strip()
+    url = url.strip()
+    if not title or not url:
+        raise HTTPException(status_code=400, detail="Title and URL are required")
+    # source_site="manual" is the same "which list did this come from" tag
+    # pattern web_search/alljobs/drushim etc already use -- writes into the
+    # SAME jobs table scraped listings use, not a separate list, so it's
+    # sortable/filterable/editable identically to a scraped job everywhere
+    # else in the dashboard. No notification: this path never touches
+    # notification_engine, only db.save_job() (same call the scraper makes).
+    job = Job(
+        url=url,
+        title=title,
+        company=company.strip(),
+        location=location.strip(),
+        work_mode=work_mode if work_mode in {"onsite", "hybrid", "remote"} else "onsite",
+        source_site="manual",
+        description=description.strip(),
+        status=status if status in STATUS_OPTIONS else "found",
+    )
+    db.save_job(conn, job)
+    return RedirectResponse(url="/jobs", status_code=303)
 
 
 @app.get("/jobs/{job_id}")
@@ -368,7 +405,6 @@ async def whatsapp_webhook_receive(request: Request, conn=Depends(get_conn)):
         for change in entry.get("changes", []):
             for msg in change.get("value", {}).get("messages", []):
                 sender = msg.get("from", "")
-                text = msg.get("text", {}).get("body", "")
 
                 # Only the configured recipient may issue commands -- these
                 # trigger real actions, so this isn't optional.
@@ -376,6 +412,17 @@ async def whatsapp_webhook_receive(request: Request, conn=Depends(get_conn)):
                     logger.warning("Ignoring WhatsApp command from unrecognized sender=%s", sender)
                     continue
 
+                if msg.get("type") == "interactive":
+                    # A job notification's interactive-button reply (e.g.
+                    # "Applied") -- id is the same "<action>:<job_id>"
+                    # payload the button was built with (see notifiers/base.py).
+                    button_id = msg.get("interactive", {}).get("button_reply", {}).get("id", "")
+                    if button_id:
+                        reply = job_actions.handle_button_action(button_id, conn)
+                        channel.send_text_to(sender, reply)
+                    continue
+
+                text = msg.get("text", {}).get("body", "")
                 action = bot_commands.match_command(text)
                 if action:
                     reply = bot_commands.handle_command(action, conn)

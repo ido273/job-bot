@@ -9,6 +9,7 @@ from .base import Button, NotificationChannel
 logger = logging.getLogger("jobbot.notifiers.telegram")
 
 API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+ANSWER_CALLBACK_URL = "https://api.telegram.org/bot{token}/answerCallbackQuery"
 
 WORK_MODE_LABELS = {
     "onsite": "🏢 On-site",
@@ -76,6 +77,18 @@ class TelegramChannel(NotificationChannel):
         the configured notification chat_id (though in this single-user bot
         they're normally the same)."""
         return self._send(text, chat_id=chat_id)
+
+    def answer_callback_query(self, callback_query_id: str) -> bool:
+        """Dismisses the button's loading spinner after a tap is handled.
+        Telegram-only -- WhatsApp's interactive-button API has no equivalent."""
+        url = ANSWER_CALLBACK_URL.format(token=self.bot_token)
+        try:
+            resp = requests.post(url, json={"callback_query_id": callback_query_id}, timeout=10)
+            resp.raise_for_status()
+            return True
+        except requests.RequestException:
+            logger.exception("Telegram answerCallbackQuery failed")
+            return False
 
     def send_digest(self, entries: list[tuple[Job, str]]) -> bool:
         if not entries:

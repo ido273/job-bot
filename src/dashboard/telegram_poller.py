@@ -13,7 +13,7 @@ import time
 
 import requests
 
-from .. import bot_commands, db
+from .. import bot_commands, db, job_actions
 from ..config import Config
 from ..notifiers.telegram import TelegramChannel
 
@@ -45,7 +45,11 @@ def _poll_loop(config: Config, stop_event: threading.Event) -> None:
             offset = int(db.get_settings(conn).get("telegram_last_update_id", "0") or 0)
             resp = requests.get(
                 GET_UPDATES_URL.format(token=channel.bot_token),
-                params={"offset": offset + 1, "timeout": POLL_TIMEOUT_SECONDS, "allowed_updates": '["message"]'},
+                params={
+                    "offset": offset + 1,
+                    "timeout": POLL_TIMEOUT_SECONDS,
+                    "allowed_updates": '["message","callback_query"]',
+                },
                 timeout=POLL_TIMEOUT_SECONDS + 10,
             )
             resp.raise_for_status()
@@ -57,19 +61,35 @@ def _poll_loop(config: Config, stop_event: threading.Event) -> None:
 
         for update in updates:
             update_id = update.get("update_id")
-            message = update.get("message") or {}
-            text = message.get("text", "")
-            sender_chat_id = str(message.get("chat", {}).get("id", ""))
+            message = update.get("message")
+            callback = update.get("callback_query")
 
-            # Only the configured chat may issue commands -- these trigger
-            # real actions (pausing the scraper), so this isn't optional.
-            if sender_chat_id != channel.chat_id:
-                logger.warning("Ignoring Telegram command from unrecognized chat_id=%s", sender_chat_id)
-            else:
-                action = bot_commands.match_command(text)
-                if action:
-                    reply = bot_commands.handle_command(action, conn)
+            if message is not None:
+                text = message.get("text", "")
+                sender_chat_id = str(message.get("chat", {}).get("id", ""))
+                # Only the configured chat may issue commands -- these
+                # trigger real actions (pausing the scraper), so this isn't
+                # optional.
+                if sender_chat_id != channel.chat_id:
+                    logger.warning("Ignoring Telegram command from unrecognized chat_id=%s", sender_chat_id)
+                else:
+                    action = bot_commands.match_command(text)
+                    if action:
+                        reply = bot_commands.handle_command(action, conn)
+                        channel.send_text_to(sender_chat_id, reply)
+
+            elif callback is not None:
+                # An inline-keyboard button tap on a job notification (e.g.
+                # "Applied") -- same chat-id gate as a typed command.
+                sender_chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
+                if sender_chat_id != channel.chat_id:
+                    logger.warning("Ignoring Telegram callback from unrecognized chat_id=%s", sender_chat_id)
+                else:
+                    reply = job_actions.handle_button_action(callback.get("data", ""), conn)
                     channel.send_text_to(sender_chat_id, reply)
+                callback_id = callback.get("id")
+                if callback_id:
+                    channel.answer_callback_query(callback_id)
 
             if update_id is not None:
                 db.set_setting(conn, "telegram_last_update_id", str(update_id))

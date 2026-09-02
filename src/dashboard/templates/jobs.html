@@ -66,7 +66,7 @@
         <div class="job-card__meta">
           {{ job['company'] or 'חברה לא ידועה' }} · {{ job['location'] or '' }} ·
           {% if job['work_mode'] == 'remote' %}מרחוק{% elif job['work_mode'] == 'hybrid' %}היברידי{% else %}במשרד{% endif %}
-          · {{ job['source_site'] }} · {{ job['found_at'][:10] }}
+          · {{ 'הזנה ידנית' if job['source_site'] == 'manual' else job['source_site'] }} · {{ job['found_at'][:10] }}
         </div>
       </div>
       <span class="badge status-{{ job['status'] or 'found' }}">{{ job['status'] or 'found' }}</span>
@@ -76,6 +76,54 @@
   {% else %}
   <div class="empty-state">אין משרות תואמות עדיין. הבוט בודק אתרים כל 10 דקות בערך.</div>
   {% endif %}
+</div>
+
+<div class="glass">
+  <h2>הוספת משרה ידנית</h2>
+  <p class="muted">משרה שמצאת בעצמך, לא דרך אחד מהאתרים הנסרקים. נשמרת יחד עם שאר המשרות, בלי שליחת התראה.</p>
+  <form method="post" action="/jobs/add">
+    <div class="form-row">
+      <div class="field">
+        <label for="add_title">תפקיד</label>
+        <input type="text" name="title" id="add_title" required>
+      </div>
+      <div class="field">
+        <label for="add_company">חברה</label>
+        <input type="text" name="company" id="add_company">
+      </div>
+      <div class="field">
+        <label for="add_location">מיקום</label>
+        <input type="text" name="location" id="add_location">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label for="add_work_mode">מתכונת עבודה</label>
+        <select name="work_mode" id="add_work_mode">
+          <option value="onsite">במשרד</option>
+          <option value="hybrid">היברידי</option>
+          <option value="remote">מרחוק</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="add_status">סטטוס</label>
+        <select name="status" id="add_status">
+          {% for s in status_options %}
+          <option value="{{ s }}" {{ "selected" if s == "found" }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="add_url">קישור</label>
+        <input type="text" name="url" id="add_url" placeholder="https://..." required>
+      </div>
+    </div>
+    <div class="field">
+      <label for="add_description">תיאור (אופציונלי)</label>
+      <textarea name="description" id="add_description" rows="3"></textarea>
+    </div>
+    <button type="submit" class="btn">הוסף משרה</button>
+  </form>
 </div>
 
 <div class="glass">

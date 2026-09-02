@@ -238,6 +238,18 @@ def update_job_tracking(
     conn.commit()
 
 
+def mark_applied(conn: sqlite3.Connection, job_id: int) -> None:
+    """Used by the notification-button "Applied" action -- only touches
+    status/date_applied, unlike update_job_tracking() which overwrites every
+    tracking field (a chat reply has no cv_version_used/cover_letter/notes
+    to send, so it must not blank out ones already set from the dashboard)."""
+    conn.execute(
+        "UPDATE jobs SET status = 'applied', date_applied = datetime('now') WHERE id = ?",
+        (job_id,),
+    )
+    conn.commit()
+
+
 def status_counts(conn: sqlite3.Connection) -> dict[str, int]:
     rows = conn.execute("SELECT COALESCE(status, 'found') AS s, COUNT(*) FROM jobs GROUP BY s").fetchall()
     return dict(rows)
