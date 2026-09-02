@@ -1,17 +1,26 @@
 """Drushim (drushim.co.il) scraper.
 
-Drushim is a Next.js app whose search-results page embeds the full result
-set as JSON in a `<script id="__NEXT_DATA__">` tag -- no per-job detail
-fetch needed. Verified against live data on 2026-09-01: job descriptions
-in that JSON ran up to ~2600 chars with no truncation markers observed
-across a real result set, so this is the full text, not an excerpt.
+Drushim is mid framework-migration: the same search URL, on different
+requests (even from the same warmed-up session pattern), comes back as
+EITHER a legacy Next.js SPA (`<script id="__NEXT_DATA__">` JSON blob) OR
+a newer Vue/Vuetify SSR build (`data-cy="job-item0"` containers, a
+`drushim_vue` cookie, `data-v-*` scoped-style hashes -- no embedded JSON,
+real jobs rendered straight into HTML). Verified live 2026-09-02 across
+5 fresh sessions: ~60% got the Vue variant. Both are genuine content, not
+a bot challenge -- confirmed by inspecting a captured Vue-variant response
+directly (real title/company/URL/location per listing). The previous
+version of this scraper only understood the Next.js shape and treated
+every Vue-variant response as "blocked", which silently threw away a
+majority of real scan attempts. Both shapes are parsed now; only an
+unrecognized third shape (or an actual block marker) raises BlockedError.
 
-Drushim runs bot-detection (PerimeterX/HUMAN-style `__uzma`/`__uzmb`/...
-cookies): a cookie-less request to the search URL comes back as a page
-shell with no embedded JSON at all. Confirmed live that reusing cookies
-from a prior page load on the same session fixes this, so this scraper
-always warms up with a homepage GET first, on the same `requests.Session`
-(which persists cookies automatically) as the search request.
+Drushim also runs bot-detection (PerimeterX/HUMAN-style `__uzma`/`__uzmb`/
+... cookies) independent of the above: a cookie-less request to the
+search URL can come back as a page shell with neither shape's data.
+Reusing cookies from a prior page load on the same session avoids this,
+so this scraper always warms up with a homepage GET first, on the same
+`requests.Session` (which persists cookies automatically) as the search
+request.
 """
 
 import json
@@ -20,6 +29,7 @@ import re
 from urllib.parse import urljoin
 
 import requests
+from bs4 import BeautifulSoup
 
 from ..models import Job
 from .base import BlockedError, SiteScraper
@@ -27,6 +37,7 @@ from .base import BlockedError, SiteScraper
 logger = logging.getLogger("jobbot.scrapers.drushim")
 
 NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
+_RAW_HTML_LOG_CHARS = 2000
 
 _HYBRID_KEYWORDS = ["hybrid", "היברידי"]
 _REMOTE_KEYWORDS = ["remote", "עבודה מהבית", "מהבית"]
@@ -78,29 +89,94 @@ class DrushimScraper(SiteScraper):
 
     def _parse_search_page(self, html: str, base_url: str) -> list[Job]:
         match = NEXT_DATA_RE.search(html)
-        if match is None:
-            # Bot-detection served a shell without the embedded JSON --
-            # treat as degraded rather than silently returning nothing
-            # every cycle (this is also what a real layout change looks like).
-            raise BlockedError("No __NEXT_DATA__ found in Drushim response (layout change or block)")
+        if match is not None:
+            try:
+                data = json.loads(match.group(1))
+                queries = data["props"]["pageProps"]["dehydratedState"]["queries"]
+            except (KeyError, json.JSONDecodeError) as exc:
+                raise BlockedError(f"Unexpected Drushim __NEXT_DATA__ shape: {exc}") from exc
 
-        try:
-            data = json.loads(match.group(1))
-            queries = data["props"]["pageProps"]["dehydratedState"]["queries"]
-        except (KeyError, json.JSONDecodeError) as exc:
-            raise BlockedError(f"Unexpected Drushim __NEXT_DATA__ shape: {exc}") from exc
+            search_queries = [q for q in queries if q.get("queryKey", [None])[0] == "search-results"]
+            if not search_queries:
+                return []
 
-        search_queries = [q for q in queries if q.get("queryKey", [None])[0] == "search-results"]
-        if not search_queries:
-            return []
+            jobs: list[Job] = []
+            for page in search_queries[0].get("state", {}).get("data", {}).get("pages", []):
+                for raw in page.get("jobs", []):
+                    job = self._parse_job(raw, base_url)
+                    if job:
+                        jobs.append(job)
+            return jobs
+
+        vue_jobs = self._parse_vue_variant(html, base_url)
+        if vue_jobs is not None:
+            return vue_jobs
+
+        # Neither known shape matched -- genuine layout change or a block
+        # variant we haven't seen yet. Log a snippet so the next occurrence
+        # has direct evidence instead of needing a live re-investigation.
+        logger.warning("drushim unrecognized response shape, raw HTML snippet: %r", html[:_RAW_HTML_LOG_CHARS])
+        raise BlockedError("No __NEXT_DATA__ or known Vue job-list markup found in Drushim response")
+
+    def _parse_vue_variant(self, html: str, base_url: str) -> list[Job] | None:
+        """Parses the newer Vue/Vuetify SSR build (see module docstring).
+        Returns None (not []) when this shape isn't present at all, so the
+        caller can tell "wrong shape, try something else" apart from
+        "right shape, zero results"."""
+        soup = BeautifulSoup(html, "html.parser")
+        containers = soup.find_all("div", attrs={"data-cy": re.compile(r"^job-item\d+$")})
+        if not containers:
+            return None
 
         jobs: list[Job] = []
-        for page in search_queries[0].get("state", {}).get("data", {}).get("pages", []):
-            for raw in page.get("jobs", []):
-                job = self._parse_job(raw, base_url)
-                if job:
-                    jobs.append(job)
+        for container in containers:
+            job = self._parse_vue_job(container, base_url)
+            if job:
+                jobs.append(job)
         return jobs
+
+    def _parse_vue_job(self, container, base_url: str) -> Job | None:
+        title_el = container.find("span", class_="job-url")
+        link = container.find("a", href=re.compile(r"^/job/"))
+        if title_el is None or link is None:
+            return None
+        title = title_el.get_text(strip=True)
+        job_url = urljoin(base_url, link["href"])
+
+        company = ""
+        company_el = container.select_one("p.display-22 a")
+        if company_el is not None:
+            company = company_el.get_text(strip=True)
+
+        details_sub = container.find("div", class_="job-details-sub")
+        detail_spans = (
+            [s.get_text(strip=True) for s in details_sub.find_all("span", class_="display-18", recursive=True)]
+            if details_sub is not None
+            else []
+        )
+        # Nested "|" separator spans get merged into the parent span's text
+        # by get_text(); strip them off each entry rather than filtering
+        # whole entries, then drop anything left empty.
+        detail_spans = [s.strip(" |") for s in detail_spans]
+        detail_spans = [s for s in detail_spans if s]
+        # First entry is location; the rest (years-experience, employment
+        # type, posted-time) get folded into the description below so the
+        # matcher's keyword/seniority scan still sees them.
+        location = detail_spans[0] if detail_spans else ""
+
+        teaser_el = container.select_one("div.job-intro p.display-18")
+        teaser = teaser_el.get_text(strip=True) if teaser_el is not None else ""
+        description = "\n".join(filter(None, [teaser, *detail_spans[1:]]))
+
+        return Job(
+            url=job_url,
+            title=title,
+            company=company,
+            location=location,
+            work_mode=_guess_work_mode([], description),
+            source_site=self.name,
+            description=description,
+        )
 
     def _parse_job(self, raw: dict, base_url: str) -> Job | None:
         job_url = raw.get("jobUrl")
