@@ -59,7 +59,7 @@ spec:
             - name: ghcr-secret
           containers:
             - name: job-bot
-              image: ghcr.io/ido273/job-bot-scraper:e68f971 # overwritten by .github/workflows/deploy.yml on every push to main
+              image: ghcr.io/ido273/job-bot-scraper:42c3338 # overwritten by .github/workflows/deploy.yml on every push to main
               args: ["--once"]
               env:
                 - name: CONFIG_PATH
