@@ -85,9 +85,10 @@ class WhatsAppChannel(NotificationChannel):
         }
         return self._post(payload)
 
-    def _format_job_message(self, job: Job, summary: str) -> str:
+    def _format_job_message(self, job: Job, summary: str, origin_tag: str = "") -> str:
         work_mode_label = WORK_MODE_LABELS.get(job.work_mode, job.work_mode or "Unknown")
-        text = (
+        text = f"{origin_tag}\n" if origin_tag else ""
+        text += (
             f"💼 *{job.title}*\n"
             f"🏭 {job.company or 'Unknown company'}\n"
             f"📍 {job.location or 'Unknown location'} · {work_mode_label}\n"
@@ -97,11 +98,20 @@ class WhatsAppChannel(NotificationChannel):
         text += f"\n🌐 Source: {job.source_site}\n🔗 {job.url}"
         return text
 
-    def send_job_match(self, job: Job, summary: str, buttons: list[Button] | None = None) -> bool:
-        text = self._format_job_message(job, summary)
+    def send_job_match(self, job: Job, summary: str, buttons: list[Button] | None = None, origin_tag: str = "") -> bool:
+        text = self._format_job_message(job, summary, origin_tag)
         if buttons:
             return self._send_interactive_buttons(text, buttons)
         return self._send_text(text)
+
+    def send_buttons(self, text: str, buttons: list[Button]) -> bool:
+        """Public entry point for sending a *new* interactive-buttons message
+        outside the initial job-match notification -- used for the "⏰ הזכר לי
+        מאוחר יותר" submenu. The Cloud API has no message-edit endpoint (unlike
+        Telegram's editMessageReplyMarkup), so "replace this message's
+        buttons" degrades to "send a follow-up message with the new buttons"
+        here -- see src/dashboard/app.py's WhatsApp webhook handler."""
+        return self._send_interactive_buttons(text, buttons)
 
     def send_degraded_alert(self, site_display_name: str, reason: str) -> bool:
         text = f"⚠️ {site_display_name} scraper degraded / blocked, skipping for now.\nReason: {reason}"
@@ -114,13 +124,14 @@ class WhatsAppChannel(NotificationChannel):
         """Reply to a specific number -- used for bot-command confirmations."""
         return self._send_text(text, to=to)
 
-    def send_digest(self, entries: list[tuple[Job, str]]) -> bool:
+    def send_digest(self, entries: list[tuple[Job, str, str]]) -> bool:
         if not entries:
             return True
         lines = [f"📬 *{len(entries)} new job match{'es' if len(entries) != 1 else ''}*\n"]
-        for job, summary in entries:
+        for job, summary, origin_tag in entries:
             work_mode_label = WORK_MODE_LABELS.get(job.work_mode, job.work_mode or "Unknown")
-            lines.append(f"💼 *{job.title}* - {job.company or 'Unknown company'} · {work_mode_label}\n🔗 {job.url}")
+            tag_prefix = f"{origin_tag} " if origin_tag else ""
+            lines.append(f"{tag_prefix}💼 *{job.title}* - {job.company or 'Unknown company'} · {work_mode_label}\n🔗 {job.url}")
         text = "\n\n".join(lines)
         if len(text) > 4000:  # WhatsApp text bodies cap at 4096 characters
             text = text[:3990].rsplit("\n", 1)[0] + "\n\n…(truncated)"

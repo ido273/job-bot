@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import logging
 import os
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,11 +19,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .. import bot_commands, db, job_actions, main
+from ..agent import status as agent_status
+from ..agent.chat import handle_chat_message
 from ..config import DEFAULT_CONFIG_PATH, load_config
 from ..logging_setup import setup_logging
 from ..models import Job
 from ..notifiers import build_channel
-from . import config_editor, telegram_poller
+from . import config_editor, reminder_checker, telegram_poller
 from .auth import require_auth
 
 logger = logging.getLogger("jobbot.dashboard.app")
@@ -30,7 +33,7 @@ logger = logging.getLogger("jobbot.dashboard.app")
 BASE_DIR = Path(__file__).parent
 ALLOWED_CV_EXTENSIONS = {".pdf", ".docx"}
 MAX_CV_SIZE_BYTES = 10 * 1024 * 1024
-STATUS_OPTIONS = ["found", "applied", "interview", "rejected", "offer", "other"]
+STATUS_OPTIONS = ["found", "applied", "interview", "rejected", "offer", "not_relevant", "remind_later", "other"]
 NOTIFICATION_MODES = ["immediate", "rate_limited", "digest", "count_batch"]
 
 # Resolved the same way src.config.load_config() resolves it, so the
@@ -46,10 +49,13 @@ CVS_DIR.mkdir(parents=True, exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    thread, stop_event = telegram_poller.start(_config)
+    telegram_thread, telegram_stop = telegram_poller.start(_config)
+    reminder_thread, reminder_stop = reminder_checker.start(_config)
     yield
-    stop_event.set()
-    thread.join(timeout=5)
+    telegram_stop.set()
+    reminder_stop.set()
+    telegram_thread.join(timeout=5)
+    reminder_thread.join(timeout=5)
 
 
 app = FastAPI(title="Job Bot Dashboard", lifespan=lifespan)
@@ -93,7 +99,15 @@ def jobs_list(
     conn=Depends(get_conn),
     _user: str = Depends(require_auth),
 ):
-    jobs = db.list_jobs(conn, status=status or None, source_site=source_site or None, work_mode=work_mode or None, sort=sort, order=order)
+    jobs = db.list_jobs(
+        conn,
+        status=status or None,
+        source_site=source_site or None,
+        work_mode=work_mode or None,
+        sort=sort,
+        order=order,
+        exclude_statuses=["not_relevant"],
+    )
     matching = config_editor.get_matching_config(CONFIG_PATH)
     linkedin_params = {
         "keywords": " OR ".join(matching["role_keywords"][:6]),
@@ -288,6 +302,7 @@ def cvs_delete(cv_id: int, conn=Depends(get_conn), _user: str = Depends(require_
 def settings_page(request: Request, conn=Depends(get_conn), _user: str = Depends(require_auth)):
     matching = config_editor.get_matching_config(CONFIG_PATH)
     notification_settings = db.get_settings(conn)
+    agent_settings = config_editor.get_agent_config(CONFIG_PATH)
     return templates.TemplateResponse(
         "settings.html",
         {
@@ -296,9 +311,30 @@ def settings_page(request: Request, conn=Depends(get_conn), _user: str = Depends
             "matching": matching,
             "settings": notification_settings,
             "notification_modes": NOTIFICATION_MODES,
+            "agent_settings": agent_settings,
             **_scanner_context(conn),
         },
     )
+
+
+@app.post("/settings/agent")
+def settings_agent_save(
+    min_relevance_score: int = Form(6),
+    reminder_offsets_minutes: str = Form("30,60,120"),
+    _user: str = Depends(require_auth),
+):
+    offsets = []
+    for part in reminder_offsets_minutes.replace(",", " ").split():
+        try:
+            offsets.append(int(part))
+        except ValueError:
+            continue
+    config_editor.save_agent_config(
+        CONFIG_PATH,
+        min_relevance_score=min_relevance_score,
+        reminder_offsets_minutes=offsets or [30, 60, 120],
+    )
+    return RedirectResponse(url="/settings", status_code=303)
 
 
 @app.post("/settings/matching")
@@ -339,6 +375,41 @@ def settings_notifications_save(
     return RedirectResponse(url="/settings", status_code=303)
 
 
+# --- Chat (dashboard side of the shared AI agent chat interface) -------------
+# Telegram's side lives in telegram_poller.py; WhatsApp's in the webhook
+# handler below -- all three call the same src/agent/chat.py logic.
+
+CHAT_THREAD_ID = "default"
+
+
+@app.get("/chat")
+def chat_page(request: Request, conn=Depends(get_conn), _user: str = Depends(require_auth)):
+    return templates.TemplateResponse(
+        "chat.html",
+        {
+            "request": request,
+            "active_page": "chat",
+            "history": db.get_chat_history(conn, "dashboard", CHAT_THREAD_ID, limit=50),
+            **_scanner_context(conn),
+        },
+    )
+
+
+@app.post("/api/chat/send")
+async def api_chat_send(request: Request, conn=Depends(get_conn), _user: str = Depends(require_auth)):
+    body = await request.json()
+    message = str(body.get("message", "")).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    reply = handle_chat_message(conn, _config, "dashboard", message, thread_id=CHAT_THREAD_ID)
+    return {"reply": reply}
+
+
+@app.get("/api/agent/status")
+def api_agent_status(conn=Depends(get_conn), _user: str = Depends(require_auth)):
+    return agent_status.get_status(conn)
+
+
 # --- Manual controls: Scan now / Pause / Resume --------------------------------
 
 
@@ -369,6 +440,22 @@ def scraper_resume(request: Request, conn=Depends(get_conn), _user: str = Depend
 # Meta's Cloud API has no polling mode -- this endpoint only receives anything
 # once the dashboard is reachable at a public HTTPS URL Meta can reach (see
 # README). Telegram's listener (telegram_poller.py) needs no such thing.
+
+
+def _handle_whatsapp_chat(sender: str, text: str) -> None:
+    chat_conn = db.connect(DB_PATH, _config.sites)
+    try:
+        reply = handle_chat_message(chat_conn, _config, "whatsapp", text)
+    except Exception:
+        logger.exception("Chat agent failed to answer a WhatsApp message")
+        reply = "אירעה שגיאה בעת עיבוד ההודעה. נסה שוב."
+    finally:
+        chat_conn.close()
+    try:
+        channel = build_channel("whatsapp", _config)
+        channel.send_text_to(sender, reply)
+    except ValueError:
+        pass  # whatsapp not configured -- nothing to send to
 
 
 @app.get("/webhooks/whatsapp")
@@ -413,13 +500,19 @@ async def whatsapp_webhook_receive(request: Request, conn=Depends(get_conn)):
                     continue
 
                 if msg.get("type") == "interactive":
-                    # A job notification's interactive-button reply (e.g.
-                    # "Applied") -- id is the same "<action>:<job_id>"
-                    # payload the button was built with (see notifiers/base.py).
+                    # A job notification's interactive-button reply -- id is
+                    # the same "<action>:<job_id>[:<extra>]" payload the
+                    # button was built with (see notifiers/base.py).
                     button_id = msg.get("interactive", {}).get("button_reply", {}).get("id", "")
                     if button_id:
-                        reply = job_actions.handle_button_action(button_id, conn)
-                        channel.send_text_to(sender, reply)
+                        result = job_actions.handle_button_action(button_id, conn, _config)
+                        if result.replace_buttons:
+                            # Cloud API has no message-edit endpoint -- "replace
+                            # buttons" degrades to "send a new message with them"
+                            # (e.g. the "⏰ הזכר לי" submenu). See notifiers/whatsapp.py.
+                            channel.send_buttons(result.reply_text, result.replace_buttons)
+                        else:
+                            channel.send_text_to(sender, result.reply_text)
                     continue
 
                 text = msg.get("text", {}).get("body", "")
@@ -427,5 +520,13 @@ async def whatsapp_webhook_receive(request: Request, conn=Depends(get_conn)):
                 if action:
                     reply = bot_commands.handle_command(action, conn)
                     channel.send_text_to(sender, reply)
+                elif text.strip():
+                    # Same shared chat agent as Telegram's free-text routing
+                    # (telegram_poller.py) -- implemented now even while
+                    # WhatsApp is off by default in config, so turning it back
+                    # on later doesn't require rebuilding this. Backgrounded
+                    # (own DB connection) so an Ollama call doesn't hold up
+                    # this webhook response -- Meta expects a fast 200.
+                    threading.Thread(target=_handle_whatsapp_chat, args=(sender, text), daemon=True).start()
 
     return {"status": "ok"}

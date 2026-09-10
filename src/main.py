@@ -18,6 +18,8 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from . import db, notification_engine
+from .agent import cv_reader
+from .agent.scoring import score_job
 from .config import Config, load_config
 from .logging_setup import setup_logging
 from .matcher import is_match
@@ -81,9 +83,54 @@ def _notify_all(channels: list[NotificationChannel], method_name: str, *args) ->
         logger.info("channel=%s method=%s status=%s", channel.name, method_name, "ok" if ok else "failed")
 
 
+SCRAPER_TAG = "🔍 מהסקרייפר"
+SCRAPER_REVIEWED_TAG = "🤖 מסוכן ה-AI (בדק תוצאה מהסקרייפר)"
+
+
+def _alert_agent_degraded_once(conn, channels: list[NotificationChannel]) -> None:
+    """Shares the `agent_ollama_degraded` settings flag with src/agent/loop.py's
+    own health check -- either process flipping it back to "false" on a
+    successful call means the other doesn't re-alert either, one alert for
+    the whole outage rather than one per unreachable matched job."""
+    if db.get_settings(conn).get("agent_ollama_degraded") == "true":
+        return
+    db.set_setting(conn, "agent_ollama_degraded", "true")
+    _notify_all(
+        channels,
+        "send_degraded_alert",
+        "AI Agent",
+        "Ollama unreachable -- scraper matches will notify unreviewed until it recovers",
+    )
+
+
+def _review_scraper_match(conn, channels: list[NotificationChannel], job, job_id: int, config: Config, cv_text: str) -> str | None:
+    """Returns the origin_tag to notify with, or None if the match should be
+    stored but NOT notified (the agent reviewed it and scored it below
+    min_relevance_score). Never blocks the scraper on Ollama being down --
+    that degrades to the old pre-agent behavior (notify unreviewed, tagged
+    plainly) instead of dropping or delaying the notification."""
+    result = score_job(job, config.matching, cv_text, config)
+    if result is None:
+        logger.warning("job_id=%d AI agent unreachable, notifying unreviewed", job_id)
+        _alert_agent_degraded_once(conn, channels)
+        return SCRAPER_TAG
+
+    if db.get_settings(conn).get("agent_ollama_degraded") == "true":
+        db.set_setting(conn, "agent_ollama_degraded", "false")
+        logger.info("AI agent scoring recovered")
+
+    db.set_job_relevance(conn, job_id, result.relevance_score, result.rationale_he)
+    if result.relevance_score >= config.agent["min_relevance_score"]:
+        return SCRAPER_REVIEWED_TAG
+
+    logger.info("job_id=%d scored %d/10 by AI agent, below threshold -- stored, not notified", job_id, result.relevance_score)
+    return None
+
+
 def run_cycle(config: Config, conn, scrapers: dict[str, SiteScraper], channels: list[NotificationChannel]) -> None:
     session = requests.Session()
     now = _utcnow()
+    cv_text = cv_reader.read_cv(conn)
 
     for name, scraper in scrapers.items():
         blocked_until = db.get_blocked_until(conn, name)
@@ -127,12 +174,15 @@ def run_cycle(config: Config, conn, scrapers: dict[str, SiteScraper], channels: 
             if is_match(job, config.matching):
                 matched_count += 1
                 job_id = db.save_job(conn, job)
+                origin_tag = _review_scraper_match(conn, channels, job, job_id, config, cv_text)
+                if origin_tag is None:
+                    continue  # agent scored it below threshold -- stored, not notified
                 summary = summarize_requirements(
                     job.description,
                     config.summary_config.get("known_tools", []),
                     config.summary_config.get("max_chars", 300),
                 )
-                notification_engine.enqueue_or_send(conn, channels, job_id, job, summary)
+                notification_engine.enqueue_or_send(conn, channels, job_id, job, summary, origin_tag=origin_tag)
 
         logger.info(
             "site=%s status=ok fetched=%d new=%d matched=%d",

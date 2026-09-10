@@ -57,6 +57,24 @@ class Config:
         return self.raw.get("summary", {})
 
     @property
+    def agent(self) -> dict[str, Any]:
+        """agent.yaml's `agent:` block, with env vars taking precedence --
+        same precedence pattern as db_path/CONFIG_PATH above. Env vars are
+        how k8s (agent.yaml, cronjob.yaml) wires in-cluster DNS URLs without
+        duplicating them in config.yaml."""
+        raw_agent = self.raw.get("agent", {})
+        return {
+            "ollama_base_url": os.environ.get("OLLAMA_BASE_URL") or raw_agent.get("ollama_base_url", "http://localhost:11434"),
+            "ollama_model": os.environ.get("OLLAMA_MODEL") or raw_agent.get("ollama_model", "gpt-oss:20b"),
+            "searxng_base_url": os.environ.get("SEARXNG_BASE_URL") or raw_agent.get("searxng_base_url", "http://localhost:8080"),
+            "scoring_timeout_seconds": int(os.environ.get("SCORING_TIMEOUT_SECONDS") or raw_agent.get("scoring_timeout_seconds", 180)),
+            "max_tool_calls_per_cycle": int(os.environ.get("MAX_TOOL_CALLS_PER_CYCLE") or raw_agent.get("max_tool_calls_per_cycle", 15)),
+            "cycle_sleep_minutes": float(os.environ.get("CYCLE_SLEEP_MINUTES") or raw_agent.get("cycle_sleep_minutes", 7)),
+            "min_relevance_score": int(os.environ.get("MIN_RELEVANCE_SCORE") or raw_agent.get("min_relevance_score", 6)),
+            "reminder_offsets_minutes": list(raw_agent.get("reminder_offsets_minutes", [30, 60, 120])),
+        }
+
+    @property
     def logging_level(self) -> str:
         return self.raw.get("logging", {}).get("level", "INFO")
 

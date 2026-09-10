@@ -147,9 +147,11 @@ anti_blocking:
 notifications:
   # Which channel(s) send a match: "telegram", "whatsapp", or both. Each
   # active channel needs its own credentials in .env (see .env.example).
+  # WhatsApp is off by default -- the code path (buttons, chat routing) is
+  # fully implemented and ready, just not turned on yet; add "whatsapp" back
+  # here once you want it live again.
   channels:
     - telegram
-    - whatsapp
 
 telegram:
   parse_mode: "HTML"
@@ -189,6 +191,29 @@ summary:
     - Azure
     - GCP
   max_chars: 300
+
+agent:
+  # In-cluster DNS (Service names, not LAN IPs) -- both live in the job-bot
+  # namespace alongside everything else. Overridable via OLLAMA_BASE_URL /
+  # SEARXNG_BASE_URL env vars (see k8s/agent.yaml, k8s/cronjob.yaml).
+  ollama_base_url: "http://ollama.job-bot.svc.cluster.local:11434"
+  ollama_model: "gpt-oss:20b"
+  searxng_base_url: "http://searxng.job-bot.svc.cluster.local:8080"
+  # Observed latency for a single scoring call against gpt-oss:20b on the
+  # GPU node -- generous on purpose, a timeout here just means "treat as
+  # unreachable for this one job" (see src/agent/scoring.py), not a crash.
+  scoring_timeout_seconds: 180
+  # Hard cap on tool calls (web_search/fetch_page) within one discovery
+  # cycle -- the liveness safeguard for src/agent/loop.py's continuous loop,
+  # since there's no k8s per-run deadline the way the scraper CronJob has.
+  max_tool_calls_per_cycle: 15
+  cycle_sleep_minutes: 7
+  # Below this (1-10), a candidate is discarded (agent's own search) or
+  # stored-but-not-notified (a scraper match the agent reviewed) -- see
+  # src/agent/discovery.py / src/agent/scoring.py.
+  min_relevance_score: 6
+  # Options offered by the "⏰ הזכר לי מאוחר יותר" notification button.
+  reminder_offsets_minutes: [30, 60, 120]
 
 database:
   path: "data/jobbot.sqlite3"

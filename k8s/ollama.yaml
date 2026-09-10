@@ -1,0 +1,105 @@
+# Ollama, serving gpt-oss:20b for the AI agent (src/agent/). Pinned to the GPU
+# node (idoslinux, labeled nvidia.com/gpu=true) via nodeSelector + the `nvidia`
+# RuntimeClass -- confirmed working via this exact mechanism during manual
+# setup, before this was moved into ArgoCD-managed manifests.
+#
+# local-path ties the PVC to whichever node first bound it -- on this
+# single-GPU-node cluster that's always idoslinux anyway, so it's not a real
+# constraint here (see k8s/cronjob.yaml's PVC comment for the general caveat).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+  namespace: job-bot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: job-bot
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # RWO PVC -- never run two pods needing it at once
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      runtimeClassName: nvidia
+      containers:
+        - name: ollama
+          image: docker.io/ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+          # Pulls the model once the server in this same container is
+          # actually accepting connections -- an initContainer can't do this,
+          # since the main container's `ollama serve` hasn't started yet at
+          # that point. The PVC below means this only really happens once;
+          # after that `ollama list` already shows the model and the pull is
+          # a fast no-op resume check.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull gpt-oss:20b"
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+          resources:
+            requests:
+              cpu: 1
+              memory: 4Gi
+            limits:
+              cpu: 4
+              memory: 12Gi
+              nvidia.com/gpu: 1
+          # Generous timing: first boot has to pull ~12GB before /api/tags
+          # ever responds.
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 40 # ~10 minutes of grace before marked not-ready
+          livenessProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 20
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: job-bot
+spec:
+  type: ClusterIP
+  selector:
+    app: ollama
+  ports:
+    - port: 11434
+      targetPort: 11434

@@ -67,6 +67,24 @@
   </form>
 </div>
 
+<div class="glass">
+  <h2>סוכן ה-AI</h2>
+  <p class="muted">סוכן ה-AI (Ollama, בקלאסטר) בודק כל התאמה שהסקרייפרים מוצאים, ומחפש בעצמו באינטרנט הפתוח.</p>
+  <form method="post" action="/settings/agent">
+    <div class="form-row">
+      <div class="field" style="max-width:220px">
+        <label for="min_relevance_score">ציון התאמה מינימלי לשליחת התראה (1-10)</label>
+        <input type="number" name="min_relevance_score" id="min_relevance_score" min="1" max="10" value="{{ agent_settings.min_relevance_score }}">
+      </div>
+      <div class="field">
+        <label for="reminder_offsets_minutes">אפשרויות "הזכר לי מאוחר יותר" (דקות, מופרדות בפסיק)</label>
+        <input type="text" name="reminder_offsets_minutes" id="reminder_offsets_minutes" value="{{ agent_settings.reminder_offsets_minutes | join(', ') }}">
+      </div>
+    </div>
+    <button type="submit" class="btn">שמור הגדרות סוכן</button>
+  </form>
+</div>
+
 <script>
   function updateNotifModeVisibility() {
     const mode = document.querySelector('input[name="notification_mode"]:checked').value;

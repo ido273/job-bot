@@ -12,6 +12,12 @@
     · אתר: {{ job['source_site'] }} · נמצא: {{ job['found_at'][:16] }}
   </p>
   <a class="btn" href="{{ job['url'] }}" target="_blank" rel="noopener">פתח מודעה מקורית ↗</a>
+  {% if job['relevance_score'] %}
+  <div style="margin-top:14px">
+    <span class="badge status-active">🎯 ציון התאמה (AI): {{ job['relevance_score'] }}/10</span>
+    {% if job['relevance_rationale'] %}<p class="muted" style="margin-top:6px">{{ job['relevance_rationale'] }}</p>{% endif %}
+  </div>
+  {% endif %}
   {% if job['description'] %}
   <details style="margin-top:16px">
     <summary style="cursor:pointer;font-weight:700">תיאור מלא</summary>

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}צ'אט | בוט חיפוש עבודה{% endblock %}
+{% block content %}
+
+<div class="glass">
+  <h1>צ'אט עם סוכן ה-AI</h1>
+  <p class="muted" id="agent-status">טוען סטטוס…</p>
+</div>
+
+<div class="glass">
+  <div id="chat-thread" class="chat-thread">
+    {% for msg in history %}
+    <div class="chat-msg chat-msg--{{ msg.role }}">{{ msg.content }}</div>
+    {% endfor %}
+    {% if not history %}
+    <div class="empty-state">שאל אותי על משרות, קורות החיים שלך, או החלטות הגשה.</div>
+    {% endif %}
+  </div>
+  <form id="chat-form">
+    <div class="field">
+      <textarea id="chat-input" rows="2" placeholder="לדוגמה: אילו משרות סימנתי כהוגשו החודש?"></textarea>
+    </div>
+    <button type="submit" class="btn" id="chat-send">שלח</button>
+  </form>
+</div>
+
+<script>
+  async function refreshAgentStatus() {
+    try {
+      const resp = await fetch("/api/agent/status");
+      const data = await resp.json();
+      let text = data.status || "";
+      if (data.ollama_degraded) text += " ⚠️";
+      document.getElementById("agent-status").textContent = text;
+    } catch (e) {
+      /* status is best-effort -- a failed poll shouldn't break the chat page */
+    }
+  }
+  refreshAgentStatus();
+  setInterval(refreshAgentStatus, 15000);
+
+  const thread = document.getElementById("chat-thread");
+  function appendMessage(role, content) {
+    const div = document.createElement("div");
+    div.className = "chat-msg chat-msg--" + role;
+    div.textContent = content;
+    thread.appendChild(div);
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  document.getElementById("chat-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = document.getElementById("chat-input");
+    const sendBtn = document.getElementById("chat-send");
+    const message = input.value.trim();
+    if (!message) return;
+
+    appendMessage("user", message);
+    input.value = "";
+    input.disabled = true;
+    sendBtn.disabled = true;
+    sendBtn.textContent = "שולח…";
+
+    try {
+      const resp = await fetch("/api/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (!resp.ok) throw new Error("request failed");
+      const data = await resp.json();
+      appendMessage("assistant", data.reply || "(אין תגובה)");
+    } catch (err) {
+      appendMessage("assistant", "שגיאה בשליחת ההודעה. נסה שוב.");
+    } finally {
+      input.disabled = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = "שלח";
+      input.focus();
+    }
+  });
+
+  thread.scrollTop = thread.scrollHeight;
+</script>
+
+{% endblock %}

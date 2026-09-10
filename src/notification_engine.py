@@ -25,8 +25,12 @@ from .summarizer import summarize_requirements
 logger = logging.getLogger("jobbot.notification_engine")
 
 
-def _applied_button(job_id: int) -> list[Button]:
-    return [Button("✅ Applied", f"applied:{job_id}")]
+def default_buttons(job_id: int) -> list[Button]:
+    return [
+        Button("✅ הגשתי", f"applied:{job_id}"),
+        Button("❌ לא רלוונטי", f"not_relevant:{job_id}"),
+        Button("⏰ הזכר לי מאוחר יותר", f"remind_menu:{job_id}"),
+    ]
 
 
 def _job_from_row(row) -> Job:
@@ -57,13 +61,20 @@ def _notify_all(channels: list[NotificationChannel], method_name: str, *args) ->
         logger.info("channel=%s method=%s status=%s", channel.name, method_name, "ok" if ok else "failed")
 
 
-def enqueue_or_send(conn, channels: list[NotificationChannel], job_id: int, job: Job, summary: str) -> None:
-    """Call once per newly-matched job, right after db.save_job()."""
+def enqueue_or_send(
+    conn, channels: list[NotificationChannel], job_id: int, job: Job, summary: str, origin_tag: str = ""
+) -> None:
+    """Call once per newly-matched/discovered job, right after db.save_job().
+    `origin_tag` is the short "🔍 מהסקרייפר" / "🤖 מסוכן ה-AI" / "🤖 מסוכן ה-AI
+    (בדק תוצאה מהסקרייפר)" prefix (see src/main.py and src/agent/discovery.py
+    for how each caller decides which one applies) -- persisted alongside a
+    queued (non-immediate) notification so it's not lost by the time
+    maybe_flush() actually sends it."""
     mode = db.get_settings(conn).get("notification_mode", "immediate")
     if mode == "immediate":
-        _notify_all(channels, "send_job_match", job, summary, _applied_button(job_id))
+        _notify_all(channels, "send_job_match", job, summary, default_buttons(job_id), origin_tag)
     else:
-        db.enqueue_notification(conn, job_id)
+        db.enqueue_notification(conn, job_id, origin_tag)
 
 
 def maybe_flush(conn, channels: list[NotificationChannel], config: Config) -> None:
@@ -77,22 +88,22 @@ def maybe_flush(conn, channels: list[NotificationChannel], config: Config) -> No
     if not pending:
         return
 
-    entries = [(_job_from_row(row), row["queue_id"], row["id"]) for row in pending]
+    entries = [(_job_from_row(row), row["queue_id"], row["id"], row["origin_tag"] or "") for row in pending]
 
     if mode == "rate_limited":
         limit = int(settings.get("rate_limit_per_hour") or 10)
         budget = max(0, limit - db.sent_count_last_hour(conn))
         to_release = entries[:budget]
-        for job, _, job_id in to_release:
-            _notify_all(channels, "send_job_match", job, _summary_for(job, config), _applied_button(job_id))
-        db.mark_notifications_sent(conn, [qid for _, qid, _ in to_release])
+        for job, _, job_id, origin_tag in to_release:
+            _notify_all(channels, "send_job_match", job, _summary_for(job, config), default_buttons(job_id), origin_tag)
+        db.mark_notifications_sent(conn, [qid for _, qid, _, _ in to_release])
 
     elif mode == "count_batch":
         batch_count = int(settings.get("batch_count") or 5)
         if len(entries) >= batch_count:
-            for job, _, job_id in entries:
-                _notify_all(channels, "send_job_match", job, _summary_for(job, config), _applied_button(job_id))
-            db.mark_notifications_sent(conn, [qid for _, qid, _ in entries])
+            for job, _, job_id, origin_tag in entries:
+                _notify_all(channels, "send_job_match", job, _summary_for(job, config), default_buttons(job_id), origin_tag)
+            db.mark_notifications_sent(conn, [qid for _, qid, _, _ in entries])
 
     elif mode == "digest":
         digest_minutes = float(settings.get("digest_minutes") or 60)
@@ -103,13 +114,13 @@ def maybe_flush(conn, channels: list[NotificationChannel], config: Config) -> No
         if due:
             # Digest bundles N matches into one message -- neither Telegram's
             # nor WhatsApp's API can attach a distinct per-job button set to
-            # one combined message, so digest mode has no "Applied" button;
+            # one combined message, so digest mode has no action buttons;
             # only immediate/rate_limited/count_batch (one job per message) do.
-            digest_entries = [(job, _summary_for(job, config)) for job, _, _ in entries]
+            digest_entries = [(job, _summary_for(job, config), origin_tag) for job, _, _, origin_tag in entries]
             for channel in channels:
                 ok = channel.send_digest(digest_entries)
                 logger.info("channel=%s method=send_digest status=%s count=%d", channel.name, "ok" if ok else "failed", len(digest_entries))
-            db.mark_notifications_sent(conn, [qid for _, qid, _ in entries])
+            db.mark_notifications_sent(conn, [qid for _, qid, _, _ in entries])
             db.set_setting(conn, "last_digest_sent_at", datetime.now(timezone.utc).isoformat())
 
     else:

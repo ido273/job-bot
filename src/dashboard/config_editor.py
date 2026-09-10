@@ -85,3 +85,24 @@ def save_matching_config(
 def get_notification_channels(config_path: str) -> list[str]:
     data = _load(config_path)
     return list(data.get("notifications", {}).get("channels", ["telegram"]))
+
+
+def get_agent_config(config_path: str) -> dict[str, Any]:
+    """Only the two AI-agent knobs meant to be dashboard-editable without a
+    redeploy -- the rest (Ollama/SearxNG URLs, model, timeouts, tool-call
+    cap) stay hand-edited in config.yaml, same precedent as anti_blocking
+    not having a UI either."""
+    data = _load(config_path)
+    agent = data.get("agent", {})
+    return {
+        "min_relevance_score": agent.get("min_relevance_score", 6),
+        "reminder_offsets_minutes": list(agent.get("reminder_offsets_minutes", [30, 60, 120])),
+    }
+
+
+def save_agent_config(config_path: str, min_relevance_score: int, reminder_offsets_minutes: list[int]) -> None:
+    data = _load(config_path)
+    agent = data.setdefault("agent", {})
+    agent["min_relevance_score"] = min_relevance_score
+    _replace_list_in_place(agent, "reminder_offsets_minutes", reminder_offsets_minutes)
+    _save(config_path, data)

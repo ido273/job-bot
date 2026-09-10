@@ -5,7 +5,7 @@
 <div class="glass">
   <h1>משרות</h1>
   <div class="stats">
-    {% for label, key in [("נמצאו", "found"), ("הוגשו", "applied"), ("ראיון", "interview"), ("הצעה", "offer"), ("נדחו", "rejected")] %}
+    {% for label, key in [("נמצאו", "found"), ("הוגשו", "applied"), ("ראיון", "interview"), ("הצעה", "offer"), ("נדחו", "rejected"), ("לא רלוונטי", "not_relevant"), ("תזכורת", "remind_later")] %}
     <div class="stat">
       <div class="num">{{ status_counts.get(key, 0) }}</div>
       <div class="label">{{ label }}</div>

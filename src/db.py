@@ -78,7 +78,22 @@ CREATE TABLE IF NOT EXISTS notification_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id INTEGER NOT NULL REFERENCES jobs(id),
     queued_at TEXT NOT NULL,
-    sent_at TEXT
+    sent_at TEXT,
+    origin_tag TEXT
+);
+
+-- Chat history for the AI agent's chat interface (src/agent/chat.py).
+-- `platform` is "telegram" | "dashboard" | "whatsapp"; `thread_id` is a
+-- fixed "default" per platform (single-user bot, no multi-session need) --
+-- kept as a real column rather than hardcoding "default" in queries so a
+-- future multi-session dashboard doesn't need a schema change.
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    role TEXT NOT NULL, -- 'user' | 'assistant'
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
 );
 """
 
@@ -90,6 +105,12 @@ DEFAULT_SETTINGS = {
     "last_digest_sent_at": "",
     "scraper_paused": "false",
     "telegram_last_update_id": "0",
+    # AI agent status/degradation state -- see src/agent/status.py and
+    # src/agent/loop.py's graceful-degradation handling.
+    "agent_status": "מאותחל",
+    "agent_status_updated_at": "",
+    "agent_last_cycle_at": "",
+    "agent_ollama_degraded": "false",
 }
 
 
@@ -97,9 +118,22 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Adds columns/rows introduced after a DB may already have been created
     (idempotent -- safe to run on every connect())."""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
-    for column in ("description", "date_applied", "cv_version_used", "cover_letter", "notes"):
+    for column in (
+        "description",
+        "date_applied",
+        "cv_version_used",
+        "cover_letter",
+        "notes",
+        "relevance_score",
+        "relevance_rationale",
+        "remind_at",
+    ):
         if column not in columns:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
+
+    queue_columns = {row[1] for row in conn.execute("PRAGMA table_info(notification_queue)").fetchall()}
+    if "origin_tag" not in queue_columns:
+        conn.execute("ALTER TABLE notification_queue ADD COLUMN origin_tag TEXT")
 
     for key, value in DEFAULT_SETTINGS.items():
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value))
@@ -199,12 +233,20 @@ def list_jobs(
     work_mode: str | None = None,
     sort: str = "found_at",
     order: str = "desc",
+    exclude_statuses: list[str] | None = None,
 ) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
     clauses, params = [], []
     if status:
         clauses.append("status = ?")
         params.append(status)
+    elif exclude_statuses:
+        # Only applied when no explicit status filter is chosen -- e.g. a
+        # job marked "not_relevant" stops showing up as a pending item by
+        # default, but is still reachable by explicitly filtering for it.
+        placeholders = ",".join("?" for _ in exclude_statuses)
+        clauses.append(f"COALESCE(status, '') NOT IN ({placeholders})")
+        params.extend(exclude_statuses)
     if source_site:
         clauses.append("source_site = ?")
         params.append(source_site)
@@ -247,6 +289,69 @@ def mark_applied(conn: sqlite3.Connection, job_id: int) -> None:
         "UPDATE jobs SET status = 'applied', date_applied = datetime('now') WHERE id = ?",
         (job_id,),
     )
+    conn.commit()
+
+
+def mark_not_relevant(conn: sqlite3.Connection, job_id: int) -> None:
+    conn.execute("UPDATE jobs SET status = 'not_relevant' WHERE id = ?", (job_id,))
+    conn.commit()
+
+
+def set_job_relevance(conn: sqlite3.Connection, job_id: int, score: int, rationale: str) -> None:
+    """Called by the AI agent's review step (src/agent/scoring.py) and by
+    discovery (src/agent/discovery.py) -- score/rationale are stored
+    regardless of whether the job ends up notified, so a below-threshold
+    scraper match is still visible (with its score) in the dashboard."""
+    conn.execute(
+        "UPDATE jobs SET relevance_score = ?, relevance_rationale = ? WHERE id = ?",
+        (score, rationale, job_id),
+    )
+    conn.commit()
+
+
+def job_exists_by_url(conn: sqlite3.Connection, url: str) -> bool:
+    row = conn.execute("SELECT 1 FROM jobs WHERE url = ?", (url,)).fetchone()
+    return row is not None
+
+
+def title_company_exists(conn: sqlite3.Connection, title: str, company: str) -> bool:
+    """Secondary dedup for the AI agent's own discovery (src/agent/discovery.py)
+    -- catches the same posting found under a different URL than a scraper
+    already stored it under. Normalized case/whitespace-insensitive compare;
+    `jobs.url` UNIQUE already handles the exact-URL case via save_job()."""
+    norm_title = " ".join((title or "").split()).lower()
+    norm_company = " ".join((company or "").split()).lower()
+    if not norm_title:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM jobs WHERE lower(trim(title)) = ? AND lower(trim(COALESCE(company, ''))) = ? LIMIT 1",
+        (norm_title, norm_company),
+    ).fetchone()
+    return row is not None
+
+
+def schedule_reminder(conn: sqlite3.Connection, job_id: int, remind_at_iso: str) -> None:
+    conn.execute(
+        "UPDATE jobs SET status = 'remind_later', remind_at = ? WHERE id = ?",
+        (remind_at_iso, job_id),
+    )
+    conn.commit()
+
+
+def due_reminders(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM jobs WHERE status = 'remind_later' AND remind_at IS NOT NULL AND remind_at <= datetime('now')"
+    ).fetchall()
+    conn.row_factory = None
+    return rows
+
+
+def clear_reminder(conn: sqlite3.Connection, job_id: int) -> None:
+    """Called right after a due reminder is re-sent (src/dashboard/reminder_checker.py)
+    -- back to a plain 'found' job so it's a normal pending item again rather
+    than staying stuck in 'remind_later' forever."""
+    conn.execute("UPDATE jobs SET status = 'found', remind_at = NULL WHERE id = ?", (job_id,))
     conn.commit()
 
 
@@ -410,10 +515,10 @@ def set_paused(conn: sqlite3.Connection, paused: bool) -> None:
 # --- Notification queue (batching modes) -------------------------------------
 
 
-def enqueue_notification(conn: sqlite3.Connection, job_id: int) -> None:
+def enqueue_notification(conn: sqlite3.Connection, job_id: int, origin_tag: str = "") -> None:
     conn.execute(
-        "INSERT INTO notification_queue (job_id, queued_at, sent_at) VALUES (?, datetime('now'), NULL)",
-        (job_id,),
+        "INSERT INTO notification_queue (job_id, queued_at, sent_at, origin_tag) VALUES (?, datetime('now'), NULL, ?)",
+        (job_id, origin_tag),
     )
     conn.commit()
 
@@ -422,7 +527,7 @@ def pending_notifications(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
-        SELECT nq.id AS queue_id, j.*
+        SELECT nq.id AS queue_id, nq.origin_tag AS origin_tag, j.*
         FROM notification_queue nq
         JOIN jobs j ON j.id = nq.job_id
         WHERE nq.sent_at IS NULL
@@ -449,3 +554,31 @@ def sent_count_last_hour(conn: sqlite3.Connection) -> int:
         "SELECT COUNT(*) FROM notification_queue WHERE sent_at IS NOT NULL AND sent_at >= datetime('now', '-1 hour')"
     ).fetchone()
     return row[0]
+
+
+# --- Chat history (AI agent chat interface, src/agent/chat.py) ---------------
+
+
+def save_chat_message(conn: sqlite3.Connection, platform: str, thread_id: str, role: str, content: str) -> None:
+    conn.execute(
+        "INSERT INTO chat_messages (platform, thread_id, role, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
+        (platform, thread_id, role, content),
+    )
+    conn.commit()
+
+
+def get_chat_history(conn: sqlite3.Connection, platform: str, thread_id: str, limit: int = 20) -> list[dict]:
+    """Returns the most recent `limit` turns in chronological order (oldest
+    first) -- the shape src/agent/chat.py needs to hand straight to Ollama as
+    the message history."""
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT role, content FROM chat_messages
+        WHERE platform = ? AND thread_id = ?
+        ORDER BY id DESC LIMIT ?
+        """,
+        (platform, thread_id, limit),
+    ).fetchall()
+    conn.row_factory = None
+    return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]

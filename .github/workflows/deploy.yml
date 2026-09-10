@@ -45,8 +45,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Two images: the scraper (Dockerfile, runs as the k8s CronJob) and
-      # the dashboard (Dockerfile.dashboard, runs as the k8s Deployment).
+      # Three images: the scraper (Dockerfile, runs as the k8s CronJob), the
+      # dashboard (Dockerfile.dashboard, runs as the k8s Deployment), and the
+      # AI agent's continuous discovery loop (Dockerfile.agent, also a
+      # Deployment -- see k8s/agent.yaml for why this one isn't a CronJob).
       - name: Build and push scraper image
         uses: docker/build-push-action@v6
         with:
@@ -66,6 +68,16 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-dashboard:${{ steps.sha.outputs.short_sha }}
           cache-from: type=gha,scope=dashboard
           cache-to: type=gha,mode=max,scope=dashboard
+
+      - name: Build and push agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.agent
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-agent:${{ steps.sha.outputs.short_sha }}
+          cache-from: type=gha,scope=agent
+          cache-to: type=gha,mode=max,scope=agent
 
   update-manifest:
     needs: build-and-push
@@ -100,6 +112,7 @@ jobs:
         run: |
           yq -i "(select(di == 1) | .spec.jobTemplate.spec.template.spec.containers[0].image) = \"${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-scraper:${SHORT_SHA}\"" k8s/cronjob.yaml
           yq -i "(select(di == 0) | .spec.template.spec.containers[0].image) = \"${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-dashboard:${SHORT_SHA}\"" k8s/dashboard.yaml
+          yq -i "(select(di == 0) | .spec.template.spec.containers[0].image) = \"${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/job-bot-agent:${SHORT_SHA}\"" k8s/agent.yaml
 
       - name: Commit and push
         env:
@@ -107,7 +120,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/cronjob.yaml k8s/dashboard.yaml
+          git add k8s/cronjob.yaml k8s/dashboard.yaml k8s/agent.yaml
           if git diff --cached --quiet; then
             echo "No manifest changes to commit."
             exit 0

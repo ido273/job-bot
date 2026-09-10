@@ -1,0 +1,57 @@
+# The AI agent's continuous discovery loop (src/agent/loop.py) -- a plain
+# Deployment, not a CronJob: there's no per-run cost to a local model, so
+# there's no reason to run it on a fixed schedule. It bounds itself instead
+# (max_tool_calls_per_cycle, then a sleep -- see src/agent/loop.py), which is
+# why this manifest has no activeDeadlineSeconds/schedule the way
+# k8s/cronjob.yaml does.
+#
+# No Service: this pod only makes outbound calls (Ollama, SearxNG, the open
+# web) and writes to the shared SQLite DB on the PVC -- nothing needs to
+# reach it over the network. It shares job-bot-data with the scraper and
+# dashboard so it sees the same DB, config.yaml, and uploaded CVs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-bot-agent
+  namespace: job-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: job-bot-agent
+  template:
+    metadata:
+      labels:
+        app: job-bot-agent
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: agent
+          image: ghcr.io/ido273/job-bot-agent:e68f971 # overwritten by .github/workflows/deploy.yml on every push to main
+          env:
+            - name: CONFIG_PATH
+              value: /app/data/config/config.yaml
+            # In-cluster DNS, not a LAN IP -- both services live in this same
+            # namespace (see k8s/ollama.yaml, k8s/searxng.yaml).
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama.job-bot.svc.cluster.local:11434"
+            - name: SEARXNG_BASE_URL
+              value: "http://searxng.job-bot.svc.cluster.local:8080"
+          envFrom:
+            - secretRef:
+                name: job-bot-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: job-bot-data

@@ -176,6 +176,18 @@ only the `*.example.*` templates are meant to be committed.
 the Phase 2 dashboard can write to it; it's seeded automatically from the
 image's default on first run.
 
+### AI agent (Ollama + SearxNG, in-cluster)
+
+`k8s/ollama.yaml` and `k8s/searxng.yaml` deploy a local LLM (gpt-oss:20b)
+and a private search backend, both pinned to the GPU node
+(`nvidia.com/gpu=true`, `runtimeClassName: nvidia`); `k8s/agent.yaml` runs
+the AI agent's own continuous discovery loop. No manual secret/credential
+step is needed for these — apply them the same way as everything else in
+`k8s/` (ArgoCD picks them up automatically once merged to `main`, same as
+the scraper/dashboard). First boot pulls the ~12GB model onto the
+`ollama-models` PVC, so give the `ollama` pod several minutes before it
+reports `Ready`. See `src/agent/` for what the agent does with them.
+
 ### Currently built
 
 - **AllJobs** scraper (`src/scrapers/alljobs.py`) — live end-to-end, parses

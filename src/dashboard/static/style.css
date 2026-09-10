@@ -427,6 +427,41 @@ textarea {
 .badge.status-rejected { color: var(--danger); border-color: var(--danger); }
 .badge.status-active { color: var(--accent-strong); border-color: var(--accent); }
 .badge.status-paused { color: var(--text-muted); }
+.badge.status-not_relevant { color: var(--text-muted); border-color: var(--border-strong); text-decoration: line-through; }
+.badge.status-remind_later { color: #7a5c00; border-color: #d4a72c; }
+
+/* --- Chat (AI agent chat interface) ------------------------------------------ */
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 55vh;
+  overflow-y: auto;
+  padding: 4px 2px 16px;
+  margin-bottom: 12px;
+}
+
+.chat-msg {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.chat-msg--user {
+  align-self: flex-end;
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+}
+
+.chat-msg--assistant {
+  align-self: flex-start;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+}
 
 /* --- Tag input --------------------------------------------------------------- */
 

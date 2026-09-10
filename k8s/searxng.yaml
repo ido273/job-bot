@@ -1,0 +1,98 @@
+# SearxNG, the AI agent's web_search tool backend (src/agent/web_tools.py).
+# format: json is off by default in SearxNG's own default settings.yml --
+# has to be explicitly enabled here for the search API to be usable
+# programmatically instead of returning only the HTML results page.
+#
+# The rate limiter (SEARXNG_LIMITER) is deliberately left off: it exists to
+# stop public-facing instances being scraped/abused, and specifically treats
+# non-browser JSON requests as suspicious -- exactly what our own agent's
+# fetch looks like. This instance is only reachable via in-cluster DNS, never
+# exposed outside the cluster, so that protection has no job to do here and
+# would only block our own traffic.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: searxng-settings
+  namespace: job-bot
+data:
+  settings.yml: |
+    use_default_settings: true
+
+    general:
+      instance_name: "job-bot-searxng"
+
+    search:
+      formats:
+        - html
+        - json
+
+    server:
+      secret_key: "job-bot-internal-searxng-do-not-expose"
+      limiter: false
+      image_proxy: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: searxng
+  namespace: job-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: searxng
+  template:
+    metadata:
+      labels:
+        app: searxng
+    spec:
+      # Not GPU work, but kept on the same node as ollama/the agent per the
+      # simplest-option instruction -- avoids reasoning about a second
+      # nodeSelector for a lightweight CPU-only service.
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      containers:
+        - name: searxng
+          image: docker.io/searxng/searxng:latest
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: settings
+              mountPath: /etc/searxng/settings.yml
+              subPath: settings.yml
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 30
+      volumes:
+        - name: settings
+          configMap:
+            name: searxng-settings
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: searxng
+  namespace: job-bot
+spec:
+  type: ClusterIP
+  selector:
+    app: searxng
+  ports:
+    - port: 8080
+      targetPort: 8080
