@@ -51,10 +51,21 @@ def run_discovery_cycle(config, conn) -> dict:
     cv_text = cv_reader.read_cv(conn)
 
     tools = {
-        "web_search": {"description": "Search the open web.", "args_doc": "query: string"},
+        "web_search": {
+            "description": "Search the open web.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Search query"}},
+                "required": ["query"],
+            },
+        },
         "fetch_page": {
             "description": "Fetch a URL and return its visible text (linkedin.com URLs are skipped -- use the search snippet instead).",
-            "args_doc": "url: string",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "URL to fetch"}},
+                "required": ["url"],
+            },
         },
     }
     dispatch = {

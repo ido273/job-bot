@@ -28,15 +28,23 @@ SYSTEM_PROMPT = (
 TOOLS = {
     "query_jobs": {
         "description": "List jobs from the database, optionally filtered.",
-        "args_doc": 'status?: string (e.g. "applied", "not_relevant", "found"), source_site?: string, work_mode?: string',
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": 'e.g. "applied", "not_relevant", "found", "remind_later"'},
+                "source_site": {"type": "string", "description": 'e.g. "alljobs", "drushim", "ai_agent", "manual"'},
+                "work_mode": {"type": "string", "description": '"onsite", "hybrid", "remote", or "unspecified"'},
+            },
+            "required": [],
+        },
     },
     "read_cv": {
         "description": "Read the candidate's most recently uploaded CV as plain text.",
-        "args_doc": "(no args)",
+        "parameters": {"type": "object", "properties": {}, "required": []},
     },
     "get_agent_status": {
         "description": "What the AI agent is currently doing (searching the web, resting, degraded) and when it last ran a cycle.",
-        "args_doc": "(no args)",
+        "parameters": {"type": "object", "properties": {}, "required": []},
     },
 }
 

@@ -1,47 +1,45 @@
-"""Manual ReAct-style tool-calling loop, used by discovery.py and chat.py
-(anything that needs the model to call tools across multiple turns).
+"""Tool-calling loop used by discovery.py and chat.py.
 
-Ollama exposes a native `tools=[...]` function-calling parameter, but this
-project deliberately doesn't use it -- see ollama_client.py's module
-docstring. Instead: the system prompt documents each tool in plain text and
-tells the model to respond with *only* `{"tool": "<name>", "args": {...}}` to
-act, or its final answer (whatever shape the caller's own prompt asked for --
-this module doesn't care, see below) once it's done. Each turn's response is
-run through parsing.extract_last_json_block; a dict with a "tool" key
-dispatches, anything else is treated as the final answer and returned as-is.
+Originally written as a manual prompt-and-parse-JSON ReAct loop, on the
+assumption that a 20B open-weight reasoning model's tool-calling via Ollama
+would be unreliable. Live-tested against the actual in-cluster Ollama
+running gpt-oss:20b before shipping (see the project plan's verification
+step) -- that assumption was wrong in an important way: Ollama's native
+`tools=[...]` mechanism works reliably for this model, returning a clean,
+structured `message.tool_calls` list. What actually doesn't work is reading
+`message.content` for a tool decision -- Ollama leaves `content` EMPTY on a
+tool call (the call lives only in `tool_calls`), so a manual
+"parse the last JSON block out of content" approach silently sees nothing
+and treats an intended tool call as an empty final answer. This module uses
+`tool_calls` directly instead.
 
-Bounded by `max_tool_calls` -- once hit, one more turn is forced with an
-explicit "stop calling tools, answer now" instruction, so a cycle can never
-loop on tool calls indefinitely (this is the discovery loop's actual
-liveness safeguard, per max_tool_calls_per_cycle in config.yaml).
+Each tool is declared as {"description": str, "parameters": <JSON Schema>}
+(the same subset of JSON Schema Ollama's own tools= param expects) --
+`web_tools`/`jobs_tool`/`cv_reader`'s actual Python functions are unchanged;
+only how their signatures are *described* to the model changed.
 """
 
 import logging
 
 from . import ollama_client
-from .parsing import extract_last_json_block
 
 logger = logging.getLogger("jobbot.agent.tool_loop")
 
 MAX_TOOL_RESULT_CHARS = 6000  # keeps one noisy fetch_page from blowing the context window
 
 
-def _render_tool_docs(tools: dict[str, dict]) -> str:
-    lines = []
-    for name, spec in tools.items():
-        lines.append(f"- {name}({spec.get('args_doc', '')}): {spec['description']}")
-    return "\n".join(lines)
-
-
-def _tool_instructions(tools: dict[str, dict]) -> str:
-    return (
-        "Available tools:\n"
-        f"{_render_tool_docs(tools)}\n\n"
-        "To call a tool, respond with ONLY a single JSON object, nothing else:\n"
-        '{"tool": "<tool_name>", "args": {...}}\n'
-        "When you are done using tools and ready to answer, respond with your "
-        "final answer instead (do not wrap it in a tool call)."
-    )
+def _to_ollama_tools(tools: dict[str, dict]) -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": spec["description"],
+                "parameters": spec.get("parameters") or {"type": "object", "properties": {}},
+            },
+        }
+        for name, spec in tools.items()
+    ]
 
 
 def run_tool_loop(
@@ -57,49 +55,45 @@ def run_tool_loop(
 ) -> tuple[str, int]:
     """Returns (final_answer_text, tool_calls_used). Raises requests.RequestException
     if Ollama itself is unreachable -- callers treat that as "agent unreachable"."""
-    full_system = f"{system_prompt}\n\n{_tool_instructions(tools)}"
-    messages = [{"role": "system", "content": full_system}, *(history or []), {"role": "user", "content": user_message}]
+    ollama_tools = _to_ollama_tools(tools)
+    messages = [{"role": "system", "content": system_prompt}, *(history or []), {"role": "user", "content": user_message}]
 
     calls_used = 0
     while True:
-        raw = ollama_client.chat(messages, base_url, model, timeout)
-        parsed = extract_last_json_block(raw)
-        wants_tool = isinstance(parsed, dict) and "tool" in parsed
+        # Once the budget is spent, the next call is made with tools=None --
+        # the model then physically cannot return a tool_calls (nothing was
+        # offered), so the loop's "no tool_calls -> final answer" branch below
+        # is guaranteed to fire on this turn. No separate forced-final-turn
+        # code path needed.
+        allow_tools = calls_used < max_tool_calls
+        message = ollama_client.chat_raw(messages, base_url, model, timeout, tools=ollama_tools if allow_tools else None)
+        tool_calls = message.get("tool_calls") or []
 
-        if not wants_tool:
-            return raw, calls_used
+        if not tool_calls:
+            return message.get("content", ""), calls_used
 
-        if calls_used >= max_tool_calls:
-            messages.append({"role": "assistant", "content": raw})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "Tool call budget reached. Do not call any more tools -- respond now with your final answer.",
-                }
-            )
-            final_raw = ollama_client.chat(messages, base_url, model, timeout)
-            return final_raw, calls_used
+        # Trimmed to role/content/tool_calls when fed back into history --
+        # dropping `thinking` keeps prior turns' reasoning out of context the
+        # model doesn't need to re-read.
+        messages.append({"role": "assistant", "content": message.get("content", ""), "tool_calls": tool_calls})
 
-        tool_name = parsed.get("tool")
-        args = parsed.get("args") if isinstance(parsed.get("args"), dict) else {}
-        fn = dispatch.get(tool_name)
-        if fn is None:
-            tool_result = f"Error: unknown tool {tool_name!r}. Available tools: {', '.join(dispatch)}"
-        else:
-            try:
-                tool_result = str(fn(**args))
-            except Exception as exc:  # noqa: BLE001 -- any tool failure must not kill the loop
-                logger.warning("tool=%s args=%r failed: %s", tool_name, args, exc)
-                tool_result = f"Error calling {tool_name}: {exc}"
-        calls_used += 1
+        for call in tool_calls:
+            fn_info = call.get("function", {})
+            name = fn_info.get("name")
+            args = fn_info.get("arguments")
+            if not isinstance(args, dict):
+                args = {}
+            fn = dispatch.get(name)
+            if fn is None:
+                result = f"Error: unknown tool {name!r}. Available tools: {', '.join(dispatch)}"
+            else:
+                try:
+                    result = str(fn(**args))
+                except Exception as exc:  # noqa: BLE001 -- any tool failure must not kill the loop
+                    logger.warning("tool=%s args=%r failed: %s", name, args, exc)
+                    result = f"Error calling {name}: {exc}"
+            calls_used += 1
 
-        if len(tool_result) > MAX_TOOL_RESULT_CHARS:
-            tool_result = tool_result[:MAX_TOOL_RESULT_CHARS] + "\n…(truncated)"
-
-        messages.append({"role": "assistant", "content": raw})
-        messages.append(
-            {
-                "role": "user",
-                "content": f"[Result of {tool_name}]\n{tool_result}\n\nContinue: call another tool, or give your final answer.",
-            }
-        )
+            if len(result) > MAX_TOOL_RESULT_CHARS:
+                result = result[:MAX_TOOL_RESULT_CHARS] + "\n…(truncated)"
+            messages.append({"role": "tool", "content": result})
