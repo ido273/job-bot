@@ -116,6 +116,11 @@ def _review_scraper_match(conn, channels: list[NotificationChannel], job, job_id
         logger.info("AI agent scoring recovered")
 
     db.set_job_relevance(conn, job_id, result.relevance_score, result.rationale_he)
+    # Also set on the in-memory Job, not just the DB row -- the immediate
+    # notification mode (the default) formats the message straight from
+    # this object, never re-reading the row it was just written to.
+    job.relevance_score = result.relevance_score
+    job.relevance_rationale = result.rationale_he
     if result.relevance_score >= config.agent["min_relevance_score"]:
         return SCRAPER_REVIEWED_TAG
 

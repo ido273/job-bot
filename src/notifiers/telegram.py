@@ -62,6 +62,11 @@ class TelegramChannel(NotificationChannel):
         )
         if summary:
             text += f"\n📋 {html.escape(summary)}\n"
+        if job.relevance_score is not None:
+            text += f"\n🎯 ציון התאמה (AI): {job.relevance_score}/10"
+            if job.relevance_rationale:
+                text += f"\n💬 {html.escape(job.relevance_rationale)}"
+            text += "\n"
         text += f"\n🌐 Source: {job.source_site}\n🔗 {job.url}"
         return text
 

@@ -44,6 +44,8 @@ def _job_from_row(row) -> Job:
         description=row["description"] or "",
         found_at=row["found_at"],
         status=row["status"],
+        relevance_score=int(row["relevance_score"]) if row["relevance_score"] is not None else None,
+        relevance_rationale=row["relevance_rationale"],
     )
 
 
