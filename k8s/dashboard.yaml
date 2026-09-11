@@ -31,7 +31,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: dashboard
-          image: ghcr.io/ido273/job-bot-dashboard:246d6c2 # overwritten by .github/workflows/deploy.yml on every push to main
+          image: ghcr.io/ido273/job-bot-dashboard:17202d4 # overwritten by .github/workflows/deploy.yml on every push to main
           ports:
             - containerPort: 8000
           env:
