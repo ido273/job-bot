@@ -71,6 +71,20 @@ spec:
               env:
                 - name: CONFIG_PATH
                   value: /app/data/config/config.yaml
+                # Explicit, not left to config.yaml's `agent:` block --
+                # confirmed live that config.yaml on the shared PVC was
+                # seeded once at original setup and silently never picked up
+                # a later addition of this block, so every Task 2 review
+                # call was falling back to the "http://localhost:11434"
+                # Python-level default (nothing listens there in this pod)
+                # instead of the real in-cluster Ollama, every single cycle,
+                # since the feature was first deployed. Same env vars
+                # k8s/agent.yaml already sets for the discovery loop -- this
+                # closes the same gap for the scraper's review step.
+                - name: OLLAMA_BASE_URL
+                  value: "http://ollama.job-bot.svc.cluster.local:11434"
+                - name: SEARXNG_BASE_URL
+                  value: "http://searxng.job-bot.svc.cluster.local:8080"
               envFrom:
                 - secretRef:
                     name: job-bot-secrets
