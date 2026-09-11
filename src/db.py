@@ -111,6 +111,7 @@ DEFAULT_SETTINGS = {
     "agent_status_updated_at": "",
     "agent_last_cycle_at": "",
     "agent_ollama_degraded": "false",
+    "agent_degraded_alert_sent_at": "",
 }
 
 
@@ -341,7 +342,15 @@ def schedule_reminder(conn: sqlite3.Connection, job_id: int, remind_at_iso: str)
 def due_reminders(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT * FROM jobs WHERE status = 'remind_later' AND remind_at IS NOT NULL AND remind_at <= datetime('now')"
+        # remind_at is stored as Python's datetime.isoformat() (job_actions.py) --
+        # "...T...+00:00" -- while datetime('now') produces SQLite's own
+        # "... ..." format with no "T"/offset. A raw string compare between
+        # the two is wrong: 'T' (0x54) sorts after ' ' (0x20), so remind_at
+        # would almost always compare as "later" than now on the same day,
+        # regardless of actual time -- reminders would silently never fire
+        # same-day. datetime(remind_at) reparses it into the matching format
+        # first so the comparison is apples-to-apples.
+        "SELECT * FROM jobs WHERE status = 'remind_later' AND remind_at IS NOT NULL AND datetime(remind_at) <= datetime('now')"
     ).fetchall()
     conn.row_factory = None
     return rows

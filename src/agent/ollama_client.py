@@ -35,9 +35,26 @@ def chat(messages: list[dict], base_url: str, model: str, timeout: float) -> str
 
 
 def is_reachable(base_url: str, timeout: float = 10) -> bool:
+    """Cheap liveness check (is the server process even up) -- NOT sufficient
+    on its own to declare Ollama healthy. Confirmed live: /api/tags keeps
+    responding fine even while /api/chat is 500ing under GPU/VRAM pressure
+    (gpt-oss:20b doesn't fully fit the deployed GPU's VRAM, so it's repeatedly
+    loaded/evicted and can fail mid-request under concurrent callers) -- see
+    chat_healthcheck for the check that actually exercises the failure mode."""
     try:
         resp = requests.get(f"{base_url.rstrip('/')}{TAGS_PATH}", timeout=timeout)
         resp.raise_for_status()
+        return True
+    except requests.RequestException:
+        return False
+
+
+def chat_healthcheck(base_url: str, model: str, timeout: float = 30) -> bool:
+    """A real minimal /api/chat round-trip -- this is the endpoint that
+    actually fails under load, so this is what loop.py's health check must
+    pass before declaring Ollama recovered, not just is_reachable()."""
+    try:
+        chat_raw([{"role": "user", "content": "hi"}], base_url, model, timeout)
         return True
     except requests.RequestException:
         return False

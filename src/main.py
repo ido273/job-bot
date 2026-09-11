@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from . import db, notification_engine
-from .agent import cv_reader
+from .agent import cv_reader, status
 from .agent.scoring import score_job
 from .config import Config, load_config
 from .logging_setup import setup_logging
@@ -87,36 +87,32 @@ SCRAPER_TAG = "🔍 מהסקרייפר"
 SCRAPER_REVIEWED_TAG = "🤖 מסוכן ה-AI (בדק תוצאה מהסקרייפר)"
 
 
-def _alert_agent_degraded_once(conn, channels: list[NotificationChannel]) -> None:
-    """Shares the `agent_ollama_degraded` settings flag with src/agent/loop.py's
-    own health check -- either process flipping it back to "false" on a
-    successful call means the other doesn't re-alert either, one alert for
-    the whole outage rather than one per unreachable matched job."""
-    if db.get_settings(conn).get("agent_ollama_degraded") == "true":
-        return
-    db.set_setting(conn, "agent_ollama_degraded", "true")
-    _notify_all(
-        channels,
-        "send_degraded_alert",
-        "AI Agent",
-        "Ollama unreachable -- scraper matches will notify unreviewed until it recovers",
-    )
-
-
 def _review_scraper_match(conn, channels: list[NotificationChannel], job, job_id: int, config: Config, cv_text: str) -> str | None:
     """Returns the origin_tag to notify with, or None if the match should be
     stored but NOT notified (the agent reviewed it and scored it below
-    min_relevance_score). Never blocks the scraper on Ollama being down --
-    that degrades to the old pre-agent behavior (notify unreviewed, tagged
-    plainly) instead of dropping or delaying the notification."""
-    result = score_job(job, config.matching, cv_text, config)
+    min_relevance_score). MUST NEVER let an AI-review failure block or delay
+    notification -- confirmed live that Ollama can return a 500 (GPU/VRAM
+    pressure under an undersized GPU for gpt-oss:20b, not just a network
+    outage) well after the connection itself succeeds, so this catches ANY
+    exception here, not only score_job's own requests.RequestException --
+    a bug in scoring/parsing must degrade exactly the same way a network
+    failure does: notify unreviewed, never silently drop the match."""
+    try:
+        result = score_job(job, config.matching, cv_text, config)
+    except Exception as exc:  # noqa: BLE001 -- see docstring: review must never block notify
+        logger.warning("job_id=%d AI review raised %s: %s -- notifying unreviewed", job_id, type(exc).__name__, exc)
+        status.set_degraded(conn, True)
+        status.maybe_alert_degraded(conn, channels, f"AI review failing ({type(exc).__name__}: {exc}) -- scraper matches notify unreviewed")
+        return SCRAPER_TAG
+
     if result is None:
         logger.warning("job_id=%d AI agent unreachable, notifying unreviewed", job_id)
-        _alert_agent_degraded_once(conn, channels)
+        status.set_degraded(conn, True)
+        status.maybe_alert_degraded(conn, channels, "Ollama unreachable -- scraper matches will notify unreviewed until it recovers")
         return SCRAPER_TAG
 
     if db.get_settings(conn).get("agent_ollama_degraded") == "true":
-        db.set_setting(conn, "agent_ollama_degraded", "false")
+        status.set_degraded(conn, False)
         logger.info("AI agent scoring recovered")
 
     db.set_job_relevance(conn, job_id, result.relevance_score, result.rationale_he)
