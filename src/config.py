@@ -65,7 +65,7 @@ class Config:
         raw_agent = self.raw.get("agent", {})
         return {
             "ollama_base_url": os.environ.get("OLLAMA_BASE_URL") or raw_agent.get("ollama_base_url", "http://localhost:11434"),
-            "ollama_model": os.environ.get("OLLAMA_MODEL") or raw_agent.get("ollama_model", "gpt-oss:20b"),
+            "ollama_model": os.environ.get("OLLAMA_MODEL") or raw_agent.get("ollama_model", "qwen3:8b"),
             "searxng_base_url": os.environ.get("SEARXNG_BASE_URL") or raw_agent.get("searxng_base_url", "http://localhost:8080"),
             "scoring_timeout_seconds": int(os.environ.get("SCORING_TIMEOUT_SECONDS") or raw_agent.get("scoring_timeout_seconds", 180)),
             "max_tool_calls_per_cycle": int(os.environ.get("MAX_TOOL_CALLS_PER_CYCLE") or raw_agent.get("max_tool_calls_per_cycle", 15)),

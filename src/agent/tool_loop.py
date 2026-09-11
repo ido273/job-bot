@@ -17,8 +17,19 @@ Each tool is declared as {"description": str, "parameters": <JSON Schema>}
 (the same subset of JSON Schema Ollama's own tools= param expects) --
 `web_tools`/`jobs_tool`/`cv_reader`'s actual Python functions are unchanged;
 only how their signatures are *described* to the model changed.
+
+Known Ollama gotcha guarded against here: Ollama has no `tool_choice`
+parameter, and a model can get stuck calling the exact same tool with the
+exact same arguments repeatedly -- e.g. after a tool error, instead of
+adjusting and retrying differently. `max_tool_calls` already guarantees the
+loop can't spin forever (it forces a no-tools final turn once the budget is
+spent -- see the `allow_tools` comment below), but without this guard a
+stuck model would burn its *entire* budget on identical repeated calls
+before ever reaching a real answer. `_IDENTICAL_CALL_LIMIT` cuts that off
+early instead of waiting for the full budget to drain.
 """
 
+import json
 import logging
 
 from . import ollama_client
@@ -26,6 +37,11 @@ from . import ollama_client
 logger = logging.getLogger("jobbot.agent.tool_loop")
 
 MAX_TOOL_RESULT_CHARS = 6000  # keeps one noisy fetch_page from blowing the context window
+IDENTICAL_CALL_LIMIT = 2  # same (tool, args) called back-to-back this many times -> stop offering tools
+
+
+def _call_signature(name: str, args: dict) -> tuple:
+    return (name, json.dumps(args, sort_keys=True, default=str))
 
 
 def _to_ollama_tools(tools: dict[str, dict]) -> list[dict]:
@@ -59,17 +75,28 @@ def run_tool_loop(
     messages = [{"role": "system", "content": system_prompt}, *(history or []), {"role": "user", "content": user_message}]
 
     calls_used = 0
+    last_signature = None
+    identical_streak = 0
+
     while True:
-        # Once the budget is spent, the next call is made with tools=None --
-        # the model then physically cannot return a tool_calls (nothing was
-        # offered), so the loop's "no tool_calls -> final answer" branch below
-        # is guaranteed to fire on this turn. No separate forced-final-turn
-        # code path needed.
-        allow_tools = calls_used < max_tool_calls
+        # Once the budget is spent -- or the model is stuck repeating the
+        # same call (see IDENTICAL_CALL_LIMIT) -- the next call is made with
+        # tools=None. The model then physically cannot return tool_calls
+        # (nothing was offered), so the "no tool_calls -> final answer"
+        # branch below is guaranteed to fire on this turn. No separate
+        # forced-final-turn code path needed for either case.
+        allow_tools = calls_used < max_tool_calls and identical_streak < IDENTICAL_CALL_LIMIT
         message = ollama_client.chat_raw(messages, base_url, model, timeout, tools=ollama_tools if allow_tools else None)
         tool_calls = message.get("tool_calls") or []
 
         if not tool_calls:
+            # Also the landing spot for the "empty response after a failed
+            # tool call" gotcha: content may legitimately be "" here (a
+            # confirmed real behavior, not just a hypothetical) -- callers
+            # already treat an empty final answer as a clean no-op (chat.py's
+            # UI shows a fallback string, scoring.py/discovery.py's JSON
+            # parse of "" cleanly yields None/{}), so returning it as-is
+            # rather than erroring is correct, not a bug to paper over here.
             return message.get("content", ""), calls_used
 
         # Trimmed to role/content/tool_calls when fed back into history --
@@ -83,6 +110,16 @@ def run_tool_loop(
             args = fn_info.get("arguments")
             if not isinstance(args, dict):
                 args = {}
+
+            signature = _call_signature(name, args)
+            if signature == last_signature:
+                identical_streak += 1
+            else:
+                identical_streak = 1
+                last_signature = signature
+            if identical_streak >= IDENTICAL_CALL_LIMIT:
+                logger.warning("tool=%s args=%r repeated %d times in a row -- forcing a final answer next turn", name, args, identical_streak)
+
             fn = dispatch.get(name)
             if fn is None:
                 result = f"Error: unknown tool {name!r}. Available tools: {', '.join(dispatch)}"

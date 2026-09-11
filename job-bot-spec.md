@@ -596,6 +596,66 @@ another file assumed.
 
 ---
 
+## Phase 5 — Local AI Agent (Ollama + SearxNG, in-cluster)
+
+> **Built 2026-09-10.** Runs alongside the Phase 1-4 scrapers/dashboard, not
+> a replacement for them. See `src/agent/` for the code, `k8s/ollama.yaml` /
+> `k8s/searxng.yaml` / `k8s/agent.yaml` for the infra.
+
+Adds a second, independent decision-maker on top of the keyword-matching
+scrapers: a local LLM (via Ollama, in-cluster, no external API calls/cost)
+that (a) searches the open web on its own for postings the scrapers never
+see, (b) re-scores every scraper match before it's allowed to notify — a
+second, more expensive filter after the cheap keyword pass, not a
+replacement for it — and (c) answers questions in a chat interface
+(dashboard + Telegram/WhatsApp) grounded in the real jobs DB and CV, not
+guesses.
+
+### Model choice: qwen3:8b (originally gpt-oss:20b)
+
+Shipped first with `gpt-oss:20b`, per the original hardware validation done
+manually before this was automated. Live investigation of a real 8-hour
+"Ollama unreachable" incident (repeated degraded alerts, zero scraper
+notifications during the window) traced the actual root cause to VRAM,
+not networking: the deployed GPU is a GTX 1060 (6GB), and gpt-oss:20b's own
+logs showed 20 of its 25 layers overflowing available VRAM. Ollama was
+repeatedly loading/evicting the model, and `/api/chat` intermittently
+returned 500 under load while the lightweight `/api/tags` endpoint kept
+responding fine — which also meant the agent's own health check (which
+only checked `/api/tags`) falsely reported "recovered" between real
+failures.
+
+Switched to `qwen3:8b` (~5.2GB quantized) — fits the same GPU with real
+headroom, confirmed via `ollama show qwen3:8b` to support the `tools`
+capability, and live-tested end-to-end against the actual
+`web_search`/`fetch_page`/`query_jobs` tools (not just a synthetic test
+tool) to confirm real tool-calling behavior on this specific model, not
+just that it loads. This is a hardware-fit correction, not a "smaller
+model for its own sake" downgrade — `OLLAMA_MODEL` in `config/config.yaml`
+is a one-line override if a bigger GPU is ever attached later.
+
+**Known Ollama gotcha, guarded against in `src/agent/tool_loop.py`:**
+Ollama has no `tool_choice` parameter, and a model can get stuck calling
+the same tool with the same arguments repeatedly (e.g. after a tool
+error) instead of erroring cleanly. `max_tool_calls_per_cycle` already
+bounds a cycle's total tool-call budget so this can never spin forever,
+but a stuck model would otherwise burn through the *entire* budget on
+identical repeats before ever producing a real answer. A same-signature
+repeat counter cuts that off after 2 identical calls in a row, forcing a
+final answer instead of waiting for the full budget to drain.
+
+### Graceful degradation
+
+An Ollama/SearxNG outage must never block or silently drop scraper
+notifications, and must never spam repeated alerts for one ongoing
+incident. Both were real bugs found and fixed during the same
+investigation (see `src/agent/status.py`'s cooldown-gated
+`maybe_alert_degraded`, and `src/main.py`'s broadened AI-review
+exception handling) — not designed-and-untested, actually reproduced
+live against the deployed cluster and re-verified after the fix.
+
+---
+
 ## Suggested order of operations
 
 1. Send **Phase 1** prompt to Claude Code. Test that it actually sends you a real Telegram message for a real AllJobs listing before moving on.

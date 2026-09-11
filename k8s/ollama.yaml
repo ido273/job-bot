@@ -1,7 +1,14 @@
-# Ollama, serving gpt-oss:20b for the AI agent (src/agent/). Pinned to the GPU
+# Ollama, serving qwen3:8b for the AI agent (src/agent/). Pinned to the GPU
 # node (idoslinux, labeled nvidia.com/gpu=true) via nodeSelector + the `nvidia`
 # RuntimeClass -- confirmed working via this exact mechanism during manual
 # setup, before this was moved into ArgoCD-managed manifests.
+#
+# Originally gpt-oss:20b -- switched after confirming live (see the AI-agent
+# degradation investigation) that it doesn't fit the deployed GPU (a GTX 1060,
+# 6GB): 20 of its 25 layers overflowed VRAM, causing repeated load/unload
+# thrashing and intermittent /api/chat 500s under load. qwen3:8b is ~5.2GB
+# quantized -- fits with real headroom on this GPU -- and is a solid current
+# default for tool-calling + reasoning at this hardware tier.
 #
 # local-path ties the PVC to whichever node first bound it -- on this
 # single-GPU-node cluster that's always idoslinux anyway, so it's not a real
@@ -51,14 +58,17 @@ spec:
           # since the main container's `ollama serve` hasn't started yet at
           # that point. The PVC below means this only really happens once;
           # after that `ollama list` already shows the model and the pull is
-          # a fast no-op resume check.
+          # a fast no-op resume check. Also removes the old gpt-oss:20b blob
+          # if present (one-time cleanup from the model switch) to reclaim
+          # PVC space -- `ollama rm` on a model that isn't there is a no-op,
+          # not an error, so this is safe to leave in permanently.
           lifecycle:
             postStart:
               exec:
                 command:
                   - sh
                   - -c
-                  - "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull gpt-oss:20b"
+                  - "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull qwen3:8b; ollama rm gpt-oss:20b 2>/dev/null || true"
           volumeMounts:
             - name: models
               mountPath: /root/.ollama

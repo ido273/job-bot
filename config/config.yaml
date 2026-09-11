@@ -197,11 +197,16 @@ agent:
   # namespace alongside everything else. Overridable via OLLAMA_BASE_URL /
   # SEARXNG_BASE_URL env vars (see k8s/agent.yaml, k8s/cronjob.yaml).
   ollama_base_url: "http://ollama.job-bot.svc.cluster.local:11434"
-  ollama_model: "gpt-oss:20b"
+  # Was gpt-oss:20b -- switched after confirming live it doesn't fit the
+  # deployed GPU's 6GB VRAM (20 of 25 layers overflowing, repeated
+  # load/unload thrashing, intermittent /api/chat 500s under load). qwen3:8b
+  # (~5.2GB quantized) fits with real headroom and has confirmed tool-calling
+  # support.
+  ollama_model: "qwen3:8b"
   searxng_base_url: "http://searxng.job-bot.svc.cluster.local:8080"
-  # Observed latency for a single scoring call against gpt-oss:20b on the
-  # GPU node -- generous on purpose, a timeout here just means "treat as
-  # unreachable for this one job" (see src/agent/scoring.py), not a crash.
+  # Observed latency for a single scoring call on the GPU node -- generous
+  # on purpose, a timeout here just means "treat as unreachable for this one
+  # job" (see src/agent/scoring.py), not a crash.
   scoring_timeout_seconds: 180
   # Hard cap on tool calls (web_search/fetch_page) within one discovery
   # cycle -- the liveness safeguard for src/agent/loop.py's continuous loop,
