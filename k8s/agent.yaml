@@ -28,7 +28,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: agent
-          image: ghcr.io/ido273/job-bot-agent:17202d4 # overwritten by .github/workflows/deploy.yml on every push to main
+          image: ghcr.io/ido273/job-bot-agent:4d41a1b # overwritten by .github/workflows/deploy.yml on every push to main
           env:
             - name: CONFIG_PATH
               value: /app/data/config/config.yaml
