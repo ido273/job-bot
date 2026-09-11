@@ -26,6 +26,8 @@ violate an exclusion keyword or exceed the maximum experience level, even if oth
 
 Respond with ONLY a single JSON object, nothing else:
 {"relevance_score": <integer 1-10>, "rationale_he": "<one or two sentence rationale, written in Hebrew>"}
+
+The rationale_he value must be written in Hebrew only. Do not use Arabic script characters under any circumstances.
 """
 
 

@@ -644,6 +644,26 @@ identical repeats before ever producing a real answer. A same-signature
 repeat counter cuts that off after 2 identical calls in a row, forcing a
 final answer instead of waiting for the full budget to drain.
 
+**Known qwen3:8b limitation, not fixed, logged instead of chased further:**
+`rationale_he` (the short Hebrew explanation attached to a relevance score,
+`src/agent/scoring.py`) occasionally has a foreign script mixed into
+otherwise-Hebrew text — first observed as Arabic-script characters, e.g.
+`خبرة` appearing mid-sentence. Added an explicit system-prompt instruction
+("write in Hebrew only, no Arabic script under any circumstances") and
+re-tested on the same two real postings (SQLink id=29, G-Ness id=19, with
+a real CV loaded) — the Arabic-script leakage was gone, but the *same
+class* of issue reappeared with Thai characters instead (`תักษות` in the
+SQLink rationale). This means it's a broader multi-script instability in
+qwen3:8b's Hebrew generation at this size, not something a script-specific
+prompt patch actually fixes — banning scripts one at a time would just be
+whack-a-mole. Per the call made when this was found: not worth further
+engineering time right now, since `relevance_score` (the actual filtering
+signal that gates notification) has been directionally sound throughout
+testing regardless of this — `rationale_he` is explanatory/supplementary
+context shown alongside the score, not the gate itself. Revisit only if a
+larger model becomes viable on the deployed hardware, or if rationale
+readability becomes a real complaint rather than a cosmetic one.
+
 ### Graceful degradation
 
 An Ollama/SearxNG outage must never block or silently drop scraper
