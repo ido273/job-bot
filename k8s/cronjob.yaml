@@ -24,6 +24,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
+  suspend: true
   resources:
     requests:
       storage: 1Gi
